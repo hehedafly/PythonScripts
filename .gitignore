@@ -3,3 +3,6 @@
 ultralytics-8.2.95/
 /Lib/site-packages/__pycache__
 *.pyc
+/YoloV8/YoloTrainData/
+YoloV8/OutputMouseBodyPic0923162319/
+/YoloV8/OutputMouseBodyPic*
