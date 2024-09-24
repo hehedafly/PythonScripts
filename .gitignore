@@ -1,0 +1,5 @@
+*.mp4
+.vscode/
+ultralytics-8.2.95/
+/Lib/site-packages/__pycache__
+*.pyc
