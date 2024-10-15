@@ -1,14 +1,19 @@
 # 加载预训练模型
 from ultralytics import YOLO
 from collections import defaultdict
+from pypylon import pylon
 import numpy as np
 import time
 import cv2
- 
-model = YOLO("best.pt")
-video_path = "WIN_20240822_15_44_20_Pro.mp4"
+
+from IPC import IPCTest
+
+model = YOLO("11sbest.pt")
 # video_path = 0
- 
+video_path = "Basler_acA1440-220um__40306945__20241005_210252740.mp4"
+UnityShm = IPCTest.SharedMemoryObj('UnityShareMemoryTest', "server", "UnityProject", 32+5*16*1024)#~80KB
+UnityShm.InitBuffer()
+
 # 打开视频文件
 cap = cv2.VideoCapture(video_path)
  
@@ -38,14 +43,21 @@ while cap.isOpened(): # 检查视频文件是否成功打开
                 counts[class_id] += 1
                 xyxy = np.array(box.xyxy[0].tolist(), int)
                 frame = cv2.rectangle(frame, (xyxy[0], xyxy[1]), (xyxy[2], xyxy[3]), (255,255,0), 2)
-        
+                if UnityShm.CheckOnlineClientsCount() > 0:
+                    UnityShm.WriteContent(";".join([str(i) for i in xyxy]), True)
  
-        object_str = object_str +". " + key
-        for class_id, count in counts.items():
-            object_str = object_str +f"{count} {class_id},"  
-            counts = defaultdict(int)  
+        # object_str = object_str +". " + key
+        # for class_id, count in counts.items():
+        #     object_str = object_str +f"{count} {class_id},"  
+        #     counts = defaultdict(int)  
         cv2.imshow("frame", frame)
-        cv2.waitKey(1)
+        key = cv2.waitKey(1) & 0xff
+        # print(key)
+        if key != 255:
+            if key == 27:
+                break
+            elif key == 32:
+                cv2.waitKey()
     
  
     if frame_count % 60 == 0:
@@ -54,8 +66,9 @@ while cap.isOpened(): # 检查视频文件是否成功打开
         startTime = time.time()
     frame_count += 1  # 更新帧计数器
  
-object_str= object_str.strip(',').strip('.')
-print("reuslt:", object_str)
+# object_str= object_str.strip(',').strip('.')
+# print("reuslt:", object_str)
  
 cap.release()
 cv2.destroyAllWindows()
+del UnityShm
