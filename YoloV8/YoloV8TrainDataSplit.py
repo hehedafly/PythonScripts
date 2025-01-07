@@ -7,7 +7,7 @@ import argparse
 import numpy as np
  
 parser = argparse.ArgumentParser()
-parser.add_argument('--rawDataPath', default='D:/Unity/PythonFiles/YoloV8/OutputMouseBodyPic0923162319', type=str, help='All File path')
+parser.add_argument('--rawDataPath', default='D:/Unity/PythonFiles/YoloV8/OutputMouseBodyPic1226080811', type=str, help='All File path')
 # 数据集的划分，地址选择自己数据下的ImageSets/Main
 parser.add_argument('--txt_path', default='D:/Unity/PythonFiles/YoloV8/YoloTrainData/labels', type=str, help='output txt label path')
 parser.add_argument('--img_path', default='D:/Unity/PythonFiles/YoloV8/YoloTrainData/images', type=str, help='output img path')
@@ -22,20 +22,9 @@ imgsavepath = opt.img_path
 totalFile = []
 with os.scandir(RawDataPath) as entries:
         for entry in entries:
-            if entry.name.endswith(".jpg"):
+            if entry.name.endswith(".png"):
             # if not entry.name.endswith(".png"):
-                totalFile.append(entry.name[:-4])
-            # if entry.name.endswith(".txt"):
-            #     with open(RawDataPath+"/"+entry.name, "r+") as tempTXT:
-            #         content = tempTXT.read()
-            #         if len(content):
-            #         #目前内容仅一行,改掉之前错的，修改后弃用
-            #             tempResult = np.asarray(content.split(" ")[1:], float)
-            #             tempResult = tempResult * [1280/720, 720/1280, 1280/720, 720/1280]
-            #             tempTXT.truncate(0)
-            #             tempStr= "0 " + " ".join([str(i) for i in tempResult])
-            #             tempTXT.write(tempStr)
-
+                totalFile.append(entry.name[:-7])
 
 dirs = [txtsavepath+"/train", txtsavepath+"/val", txtsavepath+"/test", imgsavepath+"/train", imgsavepath+"/val", imgsavepath+"/test"]
 for path in dirs:

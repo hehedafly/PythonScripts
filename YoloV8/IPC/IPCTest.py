@@ -10,11 +10,11 @@ import cv2
 
 def IntToBytes(value) -> bytearray:
         upper = value >> 8
-        down = value - upper * 255
+        down = value - upper * 256
         return bytearray([upper, down])
 def BytesToInt(byteLs) -> int:
     if len(byteLs) == 2:
-        return byteLs[0]*255 + byteLs[1]
+        return byteLs[0]*256 + byteLs[1]
     else:
         return -1
 
@@ -89,7 +89,7 @@ class SharedMemoryObj:
         self.writeBufferStartPos = -1
         self.writebufferLength = 16 * 1024
         self.writeBufferStartPosAll = list(range(32, 32 + (self.maxClientNum + 1) * 16 *1024, 16 *1024))
-        self.messageStartPos: list[int] = []
+        self.messageStartPosLs: list[int] = []
         self.newMessageStartPos = -1
         self.newMessageEndPos = -1  #contains [0xFF, 0xFF]split mark
         self.writtenMark = -1
@@ -117,7 +117,7 @@ class SharedMemoryObj:
             shm_buffer[0] = 1
             shm_buffer[1] = self.maxClientNum
             shm_buffer[3:7] = bytearray([0] * 4) # client status all init
-            shm_buffer[7] = 0xFF # client apply init
+            shm_buffer[7:31] = bytearray([0] * 24) # client apply init
         else:
             maxNum = shm_buffer[1]
             if shm_buffer[2] < maxNum:
@@ -131,6 +131,9 @@ class SharedMemoryObj:
                 return
         self.writeBufferStartPos = self.writeBufferStartPosAll[self.index]
         shm_buffer[self.writeBufferStartPos : (self.writeBufferStartPos+15)] = bytearray([0] * 15)
+        self.writtenMark = 0
+        self.newMessageStartPos = 15
+        self.newMessageEndPos = 15
 
     def ApplyForCare(self):
         global shm_buffer
@@ -141,7 +144,7 @@ class SharedMemoryObj:
     def CheckApplies(self):
         global shm_buffer
         if self.careindex == -1 and shm_buffer[7] != 0xFF and shm_buffer[8] != 0:#someone applied and match the anme
-            applyName = shm_buffer[9:shm_buffer[8]].decode()
+            applyName = bytes(shm_buffer[9:shm_buffer[8]+9]).decode()
             if applyName == self.care:
                 self.careindex = shm_buffer[7]#update care
 
@@ -157,7 +160,7 @@ class SharedMemoryObj:
                 clientIDs.append(i)
         return clientIDs
     
-    def WriteClear(self, clearPos = 0, esayclear = False):#clearPos: 0: all, 1-messages: messages shall be saved 
+    def WriteClear(self, clearPos = 0, esayclear = False):#clearPos: 0: all, 1-messages: count of latest messages shall be saved 
         global shm_buffer
 
         shm_buffer[self.writeBufferStartPos] = 0 #写开始
@@ -169,59 +172,58 @@ class SharedMemoryObj:
             shm_buffer[self.writeBufferStartPos + 9: self.writeBufferStartPos + 11] = IntToBytes(self.writtenMark)#write mark
             shm_buffer[self.writeBufferStartPos + 11: self.writeBufferStartPos + 15] = bytearray([0] * 4)
         else:
-            unreadMsg: list = []
+            unreadMsg: bytearray = bytearray([])
 
-            if clearPos and clearPos <= len(self.messageStartPos):#备份将被清理的数据
-                unreadMsg = shm_buffer[self.messageStartPos[-1 * clearPos] : self.newMessageEndPos]
-                self.messageStartPos = self.messageStartPos[-1 * clearPos : -1]
-            elif clearPos == 0 and self.careindex != -1:
-                careUnreadNum = BytesToInt(shm_buffer[32 + self.careindex * 2 - 1 : 32 + self.careindex * 2 + 1]) #cared one's unread message count
-                if careUnreadNum:
-                    unreadMsg = shm_buffer[self.messageStartPos[-1 * careUnreadNum] : self.newMessageEndPos]
-                    self.messageStartPos = self.messageStartPos[-1 * careUnreadNum : -1]
-                else:
-                    self.messageStartPos = []
+            if clearPos and clearPos <= len(self.messageStartPosLs):#备份将被清理的数据
+                unreadMsg = shm_buffer[self.messageStartPosLs[-1 * clearPos] : self.newMessageEndPos]
+                self.messageStartPosLs = self.messageStartPosLs[clearPos :]
+            # elif clearPos == 0 and self.careindex != -1:
+            #     careUnreadIndex = BytesToInt(shm_buffer[32 + self.careindex * 2 - 1 : 32 + self.careindex * 2 + 1]) - 1 #cared one's read message count
+            #     careUnreadIndex = min(careUnreadIndex, len(self.messageStartPosLs) - 1)
+            #     if careUnreadIndex:
+            #         unreadMsg = shm_buffer[self.messageStartPosLs[careUnreadIndex] : self.newMessageEndPos]
+            #         self.messageStartPosLs = self.messageStartPosLs[careUnreadIndex :]
+            #     else:
+            #         self.messageStartPosLs = []
             else:
-                    self.messageStartPos = []
+                    self.messageStartPosLs = []
             
             shm_buffer[self.writeBufferStartPos + 15 : self.writeBufferStartPos + self.writebufferLength] = bytearray([0xFF] * (self.writebufferLength - 15))
             if clearPos or self.careindex != -1:
                 shm_buffer[self.writeBufferStartPos + 15 : self.writeBufferStartPos + 15 + len(unreadMsg)] = unreadMsg
             
-            self.writtenMark = len(self.messageStartPos)
+            self.writtenMark = len(self.messageStartPosLs)
             shm_buffer[self.writeBufferStartPos + 9: self.writeBufferStartPos + 11] = IntToBytes(self.writtenMark)#write mark
-            self.newMessageStartPos = 15 if len(self.messageStartPos) == 0 else self.messageStartPos[-1]
-            self.newMessageEndPos = self.newMessageStartPos + sum(len(sublist) for sublist in unreadMsg) + (len(unreadMsg)) * 2
+            self.newMessageStartPos = 15 + 0 if len(self.messageStartPosLs) == 0 else (self.messageStartPosLs[-1] - self.messageStartPosLs[0])
+            self.newMessageEndPos = self.newMessageStartPos + len(unreadMsg)#unreadMsg包括split condon
         shm_buffer[self.writeBufferStartPos] = 1#写结束
 
 
     def WriteContent(self, _string:str, clear = False, waitEvenIfFilled = False) -> bool:
         global shm_buffer
-        try:
-            if len(_string):
-                if clear or self.newMessageEndPos + len(_string) + 2 - self.writeBufferStartPos > self.writebufferLength:
-                    self.WriteClear(esayclear= clear)
-                if waitEvenIfFilled:
-                    self.unwrittenMsg.append(_string)
-                    return False
-                shm_buffer[self.writeBufferStartPos] = 0
-                self.writtenMark += 1
-                self.newMessageStartPos = self.newMessageEndPos + ((1 + 2) if self.newMessageEndPos - (self.writeBufferStartPos + 15) > 0 else 0)
-                self.newMessageEndPos = self.newMessageStartPos + len(_string) + 2 + 2
-
-                shm_buffer[self.writeBufferStartPos + 9: self.writeBufferStartPos + 11] = IntToBytes(self.writtenMark)
-                
-                shm_buffer[self.writeBufferStartPos + 11 : self.writeBufferStartPos + 13] = IntToBytes(self.newMessageStartPos)
-                shm_buffer[self.writeBufferStartPos + 13 : self.writeBufferStartPos + 15] = IntToBytes(self.newMessageEndPos)
-                shm_buffer[self.writeBufferStartPos + self.newMessageStartPos : self.writeBufferStartPos + self.newMessageEndPos - 2] = IntToBytes(len(_string)) + _string.encode()
-                shm_buffer[self.writeBufferStartPos] = 1
-
-                self.messageStartPos.append(self.newMessageStartPos)
-                return True
+        if len(_string):
+            if clear or self.newMessageEndPos + len(_string) + 2 - self.writeBufferStartPos > self.writebufferLength:
+                self.WriteClear(esayclear= clear)
             else:
+                self.CheckReadMarkInOwnWriteBuffer()
+            if waitEvenIfFilled:
+                self.unwrittenMsg.append(_string)
                 return False
-        except Exception as e:
-            traceback.print_exc()
+            shm_buffer[self.writeBufferStartPos] = 0
+            self.writtenMark += 1
+            self.newMessageStartPos = self.newMessageEndPos
+            self.newMessageEndPos = self.newMessageStartPos + (len(_string) + 2) + 2#2for length mark, 2for split condon
+
+            shm_buffer[self.writeBufferStartPos + 9: self.writeBufferStartPos + 11] = IntToBytes(self.writtenMark)
+            
+            shm_buffer[self.writeBufferStartPos + 11 : self.writeBufferStartPos + 13] = IntToBytes(self.newMessageStartPos)
+            shm_buffer[self.writeBufferStartPos + 13 : self.writeBufferStartPos + 15] = IntToBytes(self.newMessageEndPos)
+            shm_buffer[self.writeBufferStartPos + self.newMessageStartPos : self.writeBufferStartPos + self.newMessageEndPos - 2] = IntToBytes(len(_string)) + _string.encode()
+            shm_buffer[self.writeBufferStartPos] = 1
+
+            self.messageStartPosLs.append(self.newMessageStartPos)
+            return True
+        else:
             return False
         
     def CheckReadMarkInOwnWriteBuffer(self):
@@ -230,8 +232,8 @@ class SharedMemoryObj:
         else:#if cared one have read all the msg, clear all
             careIdPos = self.index if self.index < self.careindex else self.index - 1
             careReadmark = BytesToInt(shm_buffer[self.writeBufferStartPos + 1 + careIdPos * 2 : self.writeBufferStartPos + 1 + careIdPos * 2 + 2])
-            if careReadmark == self.writtenMark:
-                self.WriteClear()
+            if self.writtenMark >= 20 and self.writtenMark - careReadmark <= 10:
+                self.WriteClear(self.writtenMark - careReadmark)
             
 
     def Read(self, readId, readMethod = "new") -> list[bytes]:
@@ -251,7 +253,7 @@ class SharedMemoryObj:
         writePos = self.index if self.index < readId else self.index - 1
         if readable:
             readmark = BytesToInt(shm_buffer[readPos + 1 + writePos * 2 : readPos + 1 + writePos * 2 + 2].tobytes())
-            writemark = BytesToInt(shm_buffer[readPos + 9 : readPos + 11])
+            writemark = BytesToInt(shm_buffer[readPos + 9 : readPos + 11].tobytes())
             if writemark >= self.writebufferLength / 4:
                 print("wrong write mark read")
                 return []
@@ -262,7 +264,7 @@ class SharedMemoryObj:
             # else:
             #     
             
-            endPos = BytesToInt(shm_buffer[readPos + 13 : readPos + 15])
+            endPos = readPos + BytesToInt(shm_buffer[readPos + 13 : readPos + 15])
             allMsgRaw = bytearray(shm_buffer[readPos + 15 : endPos])
             allMsg = allMsgRaw.split( bytes([0xFF, 0xFF]))
             allMsg = [bytes(msgUnit) for msgUnit in allMsg]
@@ -279,19 +281,19 @@ class SharedMemoryObj:
             elif readMethod == "newone":#返回单条未读
                 selectedMsg = allMsg[readmark : readmark]
                 readmark += 1
-                shm_buffer[readPos + 1 + writePos * 2 : readPos + 1 + writePos * 2 + 2] = IntToBytes(readmark + 1)
+                shm_buffer[readPos + 1 + writePos * 2 : readPos + 1 + writePos * 2 + 2] = IntToBytes(readmark)
                 return selectedMsg
             elif readMethod == "newest":
                 selectedMsg = allMsg[writemark-1 : writemark]
                 readmark = writemark
-                shm_buffer[readPos + 1 + writePos * 2 : readPos + 1 + writePos * 2 + 2] = IntToBytes(readmark + 1)
+                shm_buffer[readPos + 1 + writePos * 2 : readPos + 1 + writePos * 2 + 2] = IntToBytes(readmark)
                 return selectedMsg
         return []
     # else:
     #     return []
             
-    def ReadToStr(self, readInd, readMethod = "new") -> list[str]:
-        msgs: list[bytearray] = self.Read(readInd, readMethod)
+    def ReadToStr(self, readId, readMethod = "new") -> list[str]:
+        msgs: list[bytearray] = self.Read(readId, readMethod)
         if len(msgs):
             strMsgs: list[str] = []
             for msg in msgs:
@@ -329,8 +331,8 @@ class SharedMemoryObj:
                 #         print(newmsg)
 
         
-if __name__ == '__main__':
-    UnityShm = SharedMemoryObj('UnityShareMemoryTest', "server", "UnityProject", 32+5*16*1024)#~80KB
-    UnityShm.Start()
-    del UnityShm
+# if __name__ == '__main__':
+#     UnityShm = SharedMemoryObj('UnityShareMemoryTest', "server", "UnityProject", 32+5*16*1024)#~80KB
+#     UnityShm.Start()
+#     del UnityShm
     
