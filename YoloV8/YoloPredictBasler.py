@@ -19,6 +19,8 @@ from MessageBox import PyWinMessageBox
 
 CameraTypes = ["basler", "common", "video"]
 CameraType = "video"
+videoPath = "01_15_2012outputraw.mp4"
+UnityshmCare = True
 resolution = [1440,1080]
 recordPredictResult = False
 
@@ -33,14 +35,14 @@ if CameraType == "basler":
     camera.Width.Value = resolution[0]
     camera.Height.Value = resolution[1]
     # camera.PixelFormat = "BGR8"
-    camera.Gain.Value = 10
-    camera.ExposureTime.Value = 15000
+    camera.Gain.Value = 7.5
+    camera.ExposureTime.Value = 10000
     camera.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
 
     mediaNamePure = "Basler" + datetime.datetime.now().strftime("%m_%d_%H%M")
 elif CameraType == "video":
     camera = None
-    video_path = "bottomVision.mp4"
+    video_path = videoPath
     cap = cv2.VideoCapture(video_path)
 
     mediaNamePure = ".".join(video_path.split(".")[0:-1])
@@ -59,14 +61,14 @@ timestr = datetime.datetime.now().strftime("%m_%d_%H%M")
 
 # model = YOLO("11nbest.pt").track
 # model = YOLO("11nbottombestSecond.pt")
-model = YOLO("11nbottombestSecond.pt")
+model = YOLO("TopViewbest.pt")
 defineCircle = CircleSelect.DefineCircle()
 # video_path = 0
 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
 if recordPredictResult:
     out = cv2.VideoWriter(timestr+'output.mp4', fourcc, 50.0, (resolution[0], resolution[1]))
     outRaw = cv2.VideoWriter(timestr+'outputraw.mp4', fourcc, 50.0, (resolution[0], resolution[1]))
-UnityShm = IPCTest.SharedMemoryObj('UnityShareMemoryTest', "server", "UnityProject", 32+5*16*1024)#~80KB
+UnityShm = IPCTest.SharedMemoryObj('UnityShareMemoryTest', "server", "UnityProject" if UnityshmCare else "", 32+5*16*1024)#~80KB
 UnityShm.InitBuffer()
 
 frame_rate_divider = 1  # 设置帧率除数
@@ -121,8 +123,12 @@ def getFrame():
         grabResult = camera.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
         frame = cv2.cvtColor(np.array(grabResult.Array, np.uint8), cv2.COLOR_GRAY2RGB)
         ret =  grabResult.GrabSucceeded()
+        if not ret:
+            print("lost connection to basler")
     else:
         ret, frame = cap.read()
+        if not ret:
+            print("no camera connected")
     return ret, frame
 
 def PointOffset(point, offset:int):
@@ -142,43 +148,11 @@ def drawSelectArea(frame, selectAreas:list[list[int]], color = None):
 
         if selectPlace[1] == 0:
             frame = cv2.circle(frame, (selectPlace[2], selectPlace[3]), selectPlace[4], drawcolor, 2)
-            frame = cv2.putText(frame, str(selectPlace[0]), PointOffset((selectPlace[2], selectPlace[3]), -10), cv2.FONT_HERSHEY_SIMPLEX, fontSize, drawcolor, fontThick)
+            frame = cv2.putText(frame, str(selectPlace[0] % markCountPerType), PointOffset((selectPlace[2], selectPlace[3]), -10), cv2.FONT_HERSHEY_SIMPLEX, fontSize, drawcolor, fontThick)
 
         elif selectPlace[1] == 1:
             frame = cv2.rectangle(frame, (selectPlace[2], selectPlace[3]), (selectPlace[4], selectPlace[5]), drawcolor, 2)
-            frame = cv2.putText(frame, str(selectPlace[0]), PointOffset(((selectPlace[2] + selectPlace[4]) // 2, (selectPlace[3] + selectPlace[5]) // 2), -10), cv2.FONT_HERSHEY_SIMPLEX, fontSize, drawcolor, fontThick)
-
-
-fristFrame = None
-selectSceneMask = None
-selectMask = None
-if len(sceneInfo) == 0:
-    ret, fristFrame = getFrame()
-    if not ret:
-        quit()
-    selectSceneMask = np.zeros_like(fristFrame)
-    selectMask = np.zeros_like(fristFrame)
-
-    if ret:
-        sceneCenter, sceneRadius, sceneAngle = defineCircle.define_circle_by_three_points(fristFrame)
-        sceneInfo = [sceneCenter[0], sceneCenter[1], sceneRadius, sceneAngle]
-        selectSceneMask = cv2.circle(selectSceneMask, sceneCenter, sceneRadius, (0, 255, 0), 2)
-        selectSceneMask = CircleSelect.draw_arrow(selectSceneMask, sceneCenter, sceneRadius, sceneAngle, (0, 255, 0), 2)
-    else:
-        quit()
-else:
-    ret, fristFrame = getFrame()
-    if not ret:
-        quit()
-    selectSceneMask = np.zeros_like(fristFrame)
-    selectMask = np.zeros_like(fristFrame)
-
-    sceneCenter = (int(sceneInfo[0]), int(sceneInfo[1]))
-    sceneRadius = int(sceneInfo[2])
-    sceneAngle = sceneInfo[3]
-    selectSceneMask = cv2.circle(selectSceneMask, sceneCenter, sceneRadius, (0, 255, 0), 2)
-    selectSceneMask = CircleSelect.draw_arrow(selectSceneMask, sceneCenter, sceneRadius, sceneAngle, (0, 255, 0), 2)
-drawSelectArea(selectMask, selectAreas)
+            frame = cv2.putText(frame, str(selectPlace[0] % markCountPerType), PointOffset(((selectPlace[2] + selectPlace[4]) // 2, (selectPlace[3] + selectPlace[5]) // 2), -10), cv2.FONT_HERSHEY_SIMPLEX, fontSize, drawcolor, fontThick)
 
 #region Matplotlib
 
@@ -354,6 +328,58 @@ class GUI:
         plt.close(self.fig)
 
 #endregion
+
+fristFrame = None
+selectSceneMask = None
+selectMask = None
+if len(sceneInfo) == 0:
+    ret, fristFrame = getFrame()
+    if not ret:
+        quit()
+    selectSceneMask = np.zeros_like(fristFrame)
+    selectMask = np.zeros_like(fristFrame)
+
+    if ret:
+        sceneCenter, sceneRadius, sceneAngle = defineCircle.define_circle_by_three_points(fristFrame)
+        sceneInfo = [sceneCenter[0], sceneCenter[1], sceneRadius, sceneAngle]
+        selectSceneMask = cv2.circle(selectSceneMask, sceneCenter, sceneRadius, (0, 255, 0), 2)
+        selectSceneMask = CircleSelect.draw_arrow(selectSceneMask, sceneCenter, sceneRadius, sceneAngle, (0, 255, 0), 2)
+    else:
+        quit()
+else:
+    ret, fristFrame = getFrame()
+    if not ret:
+        quit()
+    selectSceneMask = np.zeros_like(fristFrame)
+    selectMask = np.zeros_like(fristFrame)
+
+    sceneCenter = (int(sceneInfo[0]), int(sceneInfo[1]))
+    sceneRadius = int(sceneInfo[2])
+    sceneAngle = sceneInfo[3]
+    selectSceneMask = cv2.circle(selectSceneMask, sceneCenter, sceneRadius, (0, 255, 0), 2)
+    selectSceneMask = CircleSelect.draw_arrow(selectSceneMask, sceneCenter, sceneRadius, sceneAngle, (0, 255, 0), 2)
+drawSelectArea(selectMask, selectAreas)
+
+availableMask = np.ones(fristFrame.shape, dtype= np.uint8)
+tempMask = cv2.imread("tempMask.jpg")
+if(type(tempMask) != type(None) and tempMask.shape == fristFrame.shape):
+    availableMask = tempMask
+else:
+    while True:         
+        gROI = cv2.selectROI("ROI frame", fristFrame * availableMask, False)
+
+        availableMask[gROI[1]:(gROI[1] + gROI[3]), gROI[0]:(gROI[0] + gROI[2])] = 0
+
+        if keyboard.is_pressed('s'):
+            cv2.imwrite("tempMask.jpg", availableMask)
+        elif keyboard.is_pressed('esc'):
+            cv2.destroyWindow("ROI frame")
+            break
+            
+        if gROI == (0,0,0,0):
+            cv2.destroyWindow("ROI frame")
+            break
+
 def simulateMousePosUpdate(event, x, y, flags, param):
     simulateMousePos[0:2] = [x, y]
 
@@ -371,7 +397,9 @@ while CameraType != "basler" or camera.IsGrabbing():
         outWritten:bool = False
 
     if realMouseCenter[0] > 0:
-        frame = ProcessMouseNearRegion(realMouseCenter, frame)
+        Predictframe = ProcessMouseNearRegion(realMouseCenter, frame)
+    else:
+        Predictframe = copy.deepcopy(frame) * availableMask
 
     if startTime < 0:
         startTime = time.time()
@@ -453,49 +481,47 @@ while CameraType != "basler" or camera.IsGrabbing():
     UnityShmPrepared:bool = (UnityShm.care != "" and sync) or UnityShm.care == ""
 
     if frame_count % frame_rate_divider == 0:
+        # if UnityShmPrepared:
         if UnityShmPrepared:
-            results = model(frame, verbose=False)
-            syncInd += 1 if syncInd >= 0 else 0
-            if simulate:
-                simulateMousePos[2] = syncInd if syncInd >= 0 else -1
-                # print(simulateMousePos)
-                UnityShm.WriteContent("pos:" + ";".join([str(i) for i in simulateMousePos]))
-            # index = index +1
-            for result in results:
-                for box in result.boxes:
-                    class_id = result.names[box.cls[0].item()]
-                    # if class_id == 0:
-                    xyxy = np.array(box.xyxy[0].tolist(), int)
-                    realMouseCenter = [int((xyxy[0]+xyxy[2])*0.5), int((xyxy[1]+xyxy[3])*0.5)]
-                    rectedFrame = cv2.circle(rectedFrame, realMouseCenter, 5, (255,255,0), 10)
+            results = model(Predictframe, verbose=False, conf = 0.7)
+        else:
+            results = []
+        syncInd += 1 if syncInd >= 0 else 0
+        if simulate:
+            simulateMousePos[2] = syncInd if syncInd >= 0 else -1
+            # print(simulateMousePos)
+            UnityShm.WriteContent("pos:" + ";".join([str(i) for i in simulateMousePos]))
+        # index = index +1
+        for mask in [selectSceneMask, selectMask]:
+        # 创建一个布尔掩码，标记 mask 中非黑色的区域
+            non_black_mask = (mask != [0, 0, 0]).any(axis=-1)
+        # 将 mask 的非黑色区域覆盖到 frame 上
+            rectedFrame[non_black_mask] = mask[non_black_mask]
 
-                    # (x,y,w,h) = xyxy
-                    # fileName = mediaNamePure + str(int(frame_count / 10)) + "ROI"
-                    # cv2.imwrite(tempPicFolderName +"/"+ fileName +".png", frame[y:y+h, x:x+w])
-                    # fileName = mediaNamePure +str(int(frame_count / 10))
-                    # cv2.imwrite(tempPicFolderName +"/"+ fileName +".jpg", frame)
-                    # with open(tempPicFolderName +"/"+ fileName +".txt", "w+") as file:
-                    #     file.write("0 "+ " ".join([str(i) for i in [x/resolution[0], y/resolution[1], w/resolution[0], h/resolution[1]]]))
-                    # print("Marked " + str(int(frame_count / 10)+1) + "Frames")
+        for result in results:
+            for box in result.boxes:
+                class_id = result.names[box.cls[0].item()]
+                # if class_id == 0:
+                xyxy = np.array(box.xyxy[0].tolist(), int)
+                realMouseCenter = [int((xyxy[0]+xyxy[2])*0.5), int((xyxy[1]+xyxy[3])*0.5)]
+                rectedFrame = cv2.circle(rectedFrame, realMouseCenter, 5, (255,255,0), 10)
+                if not simulate:
+                    # UnityShm.WriteContent("pos" + ";".join([str(i) for i in xyxy]), True)
+                    # UnityShm.WriteClear()
+                    temp = realMouseCenter.copy()
+                    temp.append(syncInd if syncInd >= 0 else -1)
+                    simulateMousePos[2] = syncInd if syncInd >= 0 else -1
+                    UnityShm.WriteContent("pos:" + ";".join([str(i) for i in temp]))
 
-                    # rectedFrame = cv2.rectangle(frame, (xyxy[0], xyxy[1]), (xyxy[2], xyxy[3]), (255,255,0), 2)
-                    if not simulate:
-                        # UnityShm.WriteContent("pos" + ";".join([str(i) for i in xyxy]), True)
-                        # UnityShm.WriteClear()
-                        temp = realMouseCenter.copy()
-                        temp.append(syncInd if syncInd >= 0 else -1)
-                        simulateMousePos[2] = syncInd if syncInd >= 0 else -1
-                        UnityShm.WriteContent("pos:" + ";".join([str(i) for i in temp]))
+                break
+            else:
+                realMouseCenter = [-1, -1]
 
-                    break
-                else:
-                    realMouseCenter = [-1, -1]
 
-        # object_str = object_str +". " + key
-        # for class_id, count in counts.items():
-        #     object_str = object_str +f"{count} {class_id},"
-        #     counts = defaultdict(int)
-        rectedFrame = cv2.bitwise_or(frame, cv2.bitwise_or(selectMask, selectSceneMask))
+    # object_str = object_str +". " + key
+    # for class_id, count in counts.items():
+    #     object_str = object_str +f"{count} {class_id},"
+    #     counts = defaultdict(int)
         if recordPredictResult:
             out.write(rectedFrame)
             outWritten = True
@@ -536,7 +562,7 @@ while CameraType != "basler" or camera.IsGrabbing():
                     item_list[0] = (item_list[0] + 1) * -1
                     UnityShm.WriteContent("select:" + ";".join(map(str, item_list)))
 
-        elif keyboard.is_pressed("esc"):
+        elif keyboard.is_pressed("shift+esc"):
             break
         elif keyboard.is_pressed("shift+space") and not hide:
             cv2.waitKey()

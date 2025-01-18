@@ -188,6 +188,7 @@ class DefineCircle(object):
                 center = data['points'][0]
                 radius = int(np.linalg.norm(np.array(center) - np.array(data['points'][1])))
                 cv2.circle(img, center, radius, (0,255,0), 2)
+                cv2.putText(img, str(radius), center, cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 1)
             cv2.imshow('Define Circle by Center and Point', img)
             key = cv2.waitKey(1) & 0xFF
             if key == 27:  # ESC

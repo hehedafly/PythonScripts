@@ -7,7 +7,7 @@ import argparse
 import numpy as np
  
 parser = argparse.ArgumentParser()
-parser.add_argument('--rawDataPath', default='D:/Unity/PythonFiles/YoloV8/OutputMouseBodyPic1226080811', type=str, help='All File path')
+parser.add_argument('--rawDataPath', default='D:/Unity/PythonFiles/YoloV8/OutputMouseBodyPic0116044231', type=str, help='All File path')
 # 数据集的划分，地址选择自己数据下的ImageSets/Main
 parser.add_argument('--txt_path', default='D:/Unity/PythonFiles/YoloV8/YoloTrainData/labels', type=str, help='output txt label path')
 parser.add_argument('--img_path', default='D:/Unity/PythonFiles/YoloV8/YoloTrainData/images', type=str, help='output img path')

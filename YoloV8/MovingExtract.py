@@ -11,11 +11,11 @@ MOG2_subtractor = cv2.createBackgroundSubtractorMOG2(detectShadows = False)
 
 bg_subtractor=MOG2_subtractor
 
-mediaName = "behavCam5.mp4"
+mediaName = "01_15_2012outputraw.mp4"
 mediaNamePure = mediaName.split('.')[0:-1][0]
 camera = cv2.VideoCapture(mediaName)
 waitMillSec = 1
-show = True
+show = False
 
 recFrame = 0
 recDivider = 5
@@ -49,6 +49,8 @@ while True:
         cv2.destroyWindow("ROI frame")
         break
 
+frameInd:int = 0
+
 while True:
     ret, frame = camera.read()
     frame = frame * availableMask
@@ -75,7 +77,7 @@ while True:
     # 检查每个轮廓是否超过某个值，如果超过则绘制边界框
     for contour in contours:
         tempArea = cv2.contourArea(contour)
-        if tempArea > 3000 and tempArea < 10000:
+        if tempArea > 1200 and tempArea < 4000:
             (x,y,w,h) = cv2.boundingRect(contour)
             # if show:
             #     cv2.rectangle(frame, (x,y), (x+w, y+h), (100,100,100), 2)
@@ -132,7 +134,10 @@ while True:
             break
 
     else:
-        continue
+        print(f"no movement dectected in frame{frameInd}")
+        
+
+    frameInd+=1
     
 
     # cv2.imshow("Subtractor", foreground_mask)
