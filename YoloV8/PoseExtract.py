@@ -35,7 +35,7 @@ _, fristFrame = camera.read()
 [height, width, _] = fristFrame.shape
 availableMask = np.ones(fristFrame.shape, dtype= np.uint8)
 
-model = YOLO("zj8nbest.pt")
+model = YOLO("11sbest.pt")
 
 # PosKeyPointsCount = 9
 # PosKeyPointsName = ["鼻尖", "左耳", "右耳", "左前脚", "右前脚", "左后脚", "右后脚", "尾根", "尾中" ]

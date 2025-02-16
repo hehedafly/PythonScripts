@@ -33,7 +33,7 @@ def draw_arrow(img, start_point, length, angle, color, thickness, arrow_size = -
     end_y = start_point[1] - length * math.cos(angle_rad)
     
     # 绘制主箭头
-    cv2.line(img, start_point, (int(end_x), int(end_y)), color, thickness)
+    cv2.line(img, (int(start_point[0]), int(start_point[1])), (int(end_x), int(end_y)), color, thickness)
     
     # 定义箭头的参数
     phi = math.radians(30)  # 箭头张开的角度
@@ -72,6 +72,13 @@ def calculate_circle(p1, p2, p3):
     r = np.sqrt((x - x1)**2 + (y - y1)**2)
     return (int(x), int(y)), int(r)
 
+def Distance(pos1, pos2):
+    return np.sqrt((pos1[0] - pos2[0])**2 + (pos1[1] - pos2[1])**2)
+
+def CheckInCircle(pos, center, radius):
+    return Distance(pos, center) < radius
+
+
 class DefineCircle(object):
     def __init__(self):
         super(DefineCircle, self).__init__()
@@ -81,6 +88,7 @@ class DefineCircle(object):
         data = {
             'points': [],
             'preview_circle': None,
+            'preview_arrow':[],
             'image_display': image.copy(),
             'angle' : -1
         }
@@ -131,7 +139,7 @@ class DefineCircle(object):
                     data['preview_circle'] = None
 
     @staticmethod
-    def on_mouse_three_points(event, x, y, flags, param):
+    def on_mouse_three_points(event, x, y, flags, param) -> tuple[tuple, tuple, bool]:
         self = param[1]
         mousePos:list[int] = self.mousePos
         if len(mousePos):
@@ -173,6 +181,7 @@ class DefineCircle(object):
         data = {
             'points': [],
             'preview_circle': None,
+            'preview_arrow': [],
             'image_display': image.copy()
         }
         cv2.namedWindow('Define Circle by Center and Point')
@@ -189,17 +198,35 @@ class DefineCircle(object):
                 radius = int(np.linalg.norm(np.array(center) - np.array(data['points'][1])))
                 cv2.circle(img, center, radius, (0,255,0), 2)
                 cv2.putText(img, str(radius), center, cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 1)
+                if len(data['preview_arrow']):
+                    inner:bool = CheckInCircle(center, data['preview_arrow'], radius)
+                    angle = calculate_angle(center, data['preview_arrow'])
+                    if inner: 
+                        draw_arrow(img, center, Distance(center, data['preview_arrow']), angle, (200, 200, 0), 2)
+                        cv2.putText(img, "inner", data['preview_arrow'], cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 1)
+
+                    else:
+                        angleRad = math.radians(angle)
+                        tempRadius = Distance(center, data['preview_arrow'])
+                        cv2.putText(img, "outter", data['preview_arrow'], cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 1)
+                        draw_arrow(img, np.add(center , (tempRadius * np.sin(angleRad), -1 *tempRadius * np.cos(angleRad))), tempRadius - radius, angle + 180, (200, 200, 0), 2)
             cv2.imshow('Define Circle by Center and Point', img)
             key = cv2.waitKey(1) & 0xFF
             if key == 27:  # ESC
-                cv2.destroyAllWindows()
-                return None, None
+                cv2.destroyWindow('Define Circle by Center and Point')
+                return None, None, None
             elif key == 13:  # Enter
                 if len(data['points']) >= 2:
                     center = data['points'][0]
                     radius = int(np.linalg.norm(np.array(center) - np.array(data['points'][1])))
-                    cv2.destroyAllWindows()
-                    return center, radius
+                    inner = True
+                    if len(data['preview_arrow']):
+                        inner:bool = CheckInCircle(center, data['preview_arrow'], radius)
+
+                    cv2.destroyWindow('Define Circle by Center and Point')
+                    data['preview_arrow'] = None
+
+                    return center, radius, inner
                 else:
                     print("请选择圆心和一个点。")
             elif key == 8:  # Backspace
@@ -230,20 +257,24 @@ class DefineCircle(object):
                 center = points[0]
                 radius = int(np.linalg.norm(np.array(center) - np.array((x,y))))
                 data['preview_circle'] = (center, radius)
+            elif len(points) == 2:
+                #内外箭头
+                data['preview_arrow'] = (x, y)
+
 
 if __name__ == '__main__':
-    
-    image = cv2.imread('bottomVision.jpg')
+    pass
+    # image = cv2.imread('bottomVision.jpg')
 
-    circleSelect = DefineCircle()
-    center, radius, angle = circleSelect.define_circle_by_three_points(image)
-    if center and radius:
-        print(f'圆心: {center}, 半径: {radius}, 角度: {angle}')
-    else:
-        print("未定义圆。")
+    # circleSelect = DefineCircle()
+    # center, radius, angle = circleSelect.define_circle_by_three_points(image)
+    # if center and radius:
+    #     print(f'圆心: {center}, 半径: {radius}, 角度: {angle}')
+    # else:
+    #     print("未定义圆。")
 
-    center, radius = circleSelect.define_circle_by_center_and_point(image)
-    if center and radius:
-        print(f'圆心: {center}, 半径: {radius}')
-    else:
-        print("未定义圆。")
+    # center, radius, inner = circleSelect.define_circle_by_center_and_point(image)
+    # if center and radius:
+    #     print(f'圆心: {center}, 半径: {radius}')
+    # else:
+    #     print("未定义圆。")
