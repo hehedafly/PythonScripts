@@ -109,13 +109,15 @@ class DefineCircle(object):
                 if len(data['points']) == 3:
                     draw_arrow(img, center, radius, calculate_angle(center, data['points'][0]), (255, 0, 0), 2, 10)
                     draw_arrow(img, center, radius, calculate_angle(center, self.mousePos), (0, 255, 0), 2, 10)
+                    if len(self.mousePos):
+                        cv2.putText(img, str(calculate_angle(center, self.mousePos)), [self.mousePos[0] - 40, self.mousePos[1]], cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
                 elif len(data['points']) == 4:
                     data['angle'] = calculate_angle(center, data['points'][-1])
                     draw_arrow(img, center, radius, data['angle'], (0, 255, 0), 2, 4)
             if len(self.mousePos) and len(data['points']) < 4:
                 cv2.circle(img, self.mousePos, 5, (0,0,255), 2)
                 annotate:list[str] = ["1st/3 point defines the circle and direction if needed", "2nd/3 point defines the circle", "3rd/3 point defines the circle", "circle direction"]
-                cv2.putText(img, annotate[len(data['points'])], [self.mousePos[0] - 40, self.mousePos[1] + 40], cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 1)
+                cv2.putText(img, annotate[len(data['points'])], [self.mousePos[0] - 40, self.mousePos[1] + 40], cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
 
             cv2.imshow('Define Circle by Three Points', img)
             key = cv2.waitKey(1) & 0xFF

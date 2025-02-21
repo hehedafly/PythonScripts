@@ -31,6 +31,8 @@ confidenceCoefficient = 0.6
 UnityshmCare = True
 resolution = [1440,1080]
 recordPredictResult = False
+videoSaveFolder = "outputVideo/"
+missedFrameSaveFolder = "missedFrames/"
 
 multiThread = False 
 Task: Literal['detect', 'track'] = 'detect'
@@ -83,9 +85,9 @@ timestr = datetime.datetime.now().strftime("%m_%d_%H%M")
 
 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
 if recordPredictResult:
-    out = cv2.VideoWriter(timestr+'output.mp4', fourcc, 50.0, (resolution[0], resolution[1]))
+    out = cv2.VideoWriter(videoSaveFolder + timestr+'output.mp4', fourcc, 50.0, (resolution[0], resolution[1]))
     if not multiThread:
-        outRaw = cv2.VideoWriter(timestr+'outputraw.mp4', fourcc, 60.0, (resolution[0], resolution[1]))
+        outRaw = cv2.VideoWriter(videoSaveFolder + timestr+'outputraw.mp4', fourcc, 50.0, (resolution[0], resolution[1]))
 else:
     out = None
     outRaw = None
@@ -474,6 +476,7 @@ class GUI:
             original_center_y = last[3]
             oroginal_angle = math.atan2(original_center_y - center_y, original_center_x - center_x)
             radius = last[4]
+            inner = last[5]
             
             # 计算环的半径（形状中心到旋转中心的距离）
             ring_radius = math.hypot(original_center_x - center_x, original_center_y - center_y)
@@ -486,7 +489,7 @@ class GUI:
                     new_center_x = center_x + ring_radius * math.cos(angle_rad)
                     new_center_y = center_y + ring_radius * math.sin(angle_rad)
                     # 保持半径不变
-                    new_shape = [mark + i + 1, 0, int(new_center_x + 0.5), int(new_center_y + 0.5), radius, -1]
+                    new_shape = [mark + i + 1, 0, int(new_center_x + 0.5), int(new_center_y + 0.5), radius, inner]
                     self.selectList.append(new_shape)
             plt.close(self.fig)
             self.Init(self.oframe)
@@ -585,7 +588,9 @@ if len(sceneInfo) == 0:
     selectMask = np.zeros_like(fristFrame)
 
     sceneCenter, sceneRadius, sceneAngle = defineCircle.define_circle_by_three_points(fristFrame)
+    # sceneAngle -= 90 #defineCircle中以正上方为0
     sceneInfo = [sceneCenter[0], sceneCenter[1], sceneRadius, sceneAngle]
+    selectChanged = True
     selectSceneMask = cv2.circle(selectSceneMask, sceneCenter, sceneRadius, (0, 255, 0), 2)
     selectSceneMask = CircleSelect.draw_arrow(selectSceneMask, sceneCenter, sceneRadius, sceneAngle, (0, 255, 0), 2)
 
@@ -603,7 +608,7 @@ else:
     selectSceneMask = cv2.circle(selectSceneMask, sceneCenter, sceneRadius, (0, 255, 0), 2)
     selectSceneMask = CircleSelect.draw_arrow(selectSceneMask, sceneCenter, sceneRadius, sceneAngle, (0, 255, 0), 2)
 drawSelectArea(selectMask, selectAreas)
-PreBoolMask = selectMask.any(axis=-1)
+PreBoolMask = ~(selectMask.any(axis=-1))
 selectMask[PreBoolMask] = selectSceneMask[PreBoolMask]
 PreBoolMask = selectMask.any(axis=-1)
 
@@ -701,8 +706,9 @@ while CameraType != "basler" or (multiThread or camera.IsGrabbing()):
                                             sync = True
                                             syncInd = 0
                                             UnityShm.WriteClear()
-                                            for selectedAreaSync in selectAreas:
-                                                UnityShm.WriteContent("select:" + ";".join(map(str, selectedAreaSync)))
+                                            for i in range(2):
+                                                for selectedAreaSync in selectAreas:
+                                                    UnityShm.WriteContent("select:" + ";".join(map(str, selectedAreaSync)))
                                             print("sync succeed")
                                             syncTryTimes = syncTryTimesMax
                                             break
@@ -760,7 +766,7 @@ while CameraType != "basler" or (multiThread or camera.IsGrabbing()):
             # print(simulateMousePos)
             UnityShm.WriteContent("pos:" + ";".join([str(i) for i in simulateMousePos]))
         # index = index +1
-            rectedFrame[PreBoolMask] = selectMask[PreBoolMask]
+        rectedFrame[PreBoolMask] = selectMask[PreBoolMask]
 
         # for result in results:
         #     for box in result.boxes:
@@ -784,6 +790,7 @@ while CameraType != "basler" or (multiThread or camera.IsGrabbing()):
             # break
         else:
             realMouseCenter = [-1, -1]
+            cv2.imwrite(missedFrameSaveFolder + timestr + f"frame{frame_count}.jpg")
 
         if recordPredictResult:
             out.write(rectedFrame)
@@ -807,7 +814,7 @@ while CameraType != "basler" or (multiThread or camera.IsGrabbing()):
 
             selectMask.fill(0)
             drawSelectArea(selectMask, selectAreas)
-            PreBoolMask = selectMask.any(axis=-1)
+            PreBoolMask = ~(selectMask.any(axis=-1))
             selectMask[PreBoolMask] = selectSceneMask[PreBoolMask]
             PreBoolMask = selectMask.any(axis=-1)
 
@@ -869,5 +876,6 @@ if recordPredictResult and out != None:
     out.release()
     if not multiThread and outRaw != None:
         outRaw.release()
+    print("video stream released")
 cv2.destroyAllWindows()
 del UnityShm
