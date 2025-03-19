@@ -78,11 +78,12 @@ class SharedMemoryObj:
                 self.shm.buf[0] = 0
                 self.shm.close()
                 self.shm.unlink()
+                self.shm = None
 
             else:
                 print("shm doesn't exist")
             self.shm = None
-            quit()
+            return
 
  
         shm_buffer = self.shm.buf
@@ -98,6 +99,7 @@ class SharedMemoryObj:
 
         shm_buffer[0:32] = bytearray([0] * 32)
         shm_buffer[32:] = bytearray([0xFF] * len(shm_buffer[32:]))
+
     
     def __del__(self):
         if self.shm != None:
@@ -111,7 +113,10 @@ class SharedMemoryObj:
                 self.shm.close()
         print("server offline")
         
-    def InitBuffer(self):
+    def InitBuffer(self) -> bool:
+        if self.shm == None:
+            return False
+
         global shm_buffer
         if self.name == "server":
             shm_buffer[0] = 1
@@ -128,12 +133,13 @@ class SharedMemoryObj:
 
             else:
                 print("")#已满
-                return
+                return False
         self.writeBufferStartPos = self.writeBufferStartPosAll[self.index]
         shm_buffer[self.writeBufferStartPos : (self.writeBufferStartPos+15)] = bytearray([0] * 15)
         self.writtenMark = 0
         self.newMessageStartPos = 15
         self.newMessageEndPos = 15
+        return True
 
     def ApplyForCare(self):
         global shm_buffer

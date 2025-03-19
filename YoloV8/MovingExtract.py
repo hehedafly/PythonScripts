@@ -1,6 +1,7 @@
 import os
 import cv2
 import time
+import random
 from ultralytics import YOLO
 from math import*
 import numpy as np
@@ -12,15 +13,27 @@ MOG2_subtractor = cv2.createBackgroundSubtractorMOG2(detectShadows = False)
 
 bg_subtractor=MOG2_subtractor
 
-mediaName = "01_17_1842outputraw.mp4"
-mediaNamePure = mediaName.split('.')[0:-1][0]
-camera = cv2.VideoCapture(mediaName)
+mediaName = "missedFrames"
+mediaNamePure = mediaName.split('.')[0:-1][0] if mediaName.endswith('.mp4') else mediaName
+picList = []
+if(mediaName.endswith('.mp4')):
+    camera = cv2.VideoCapture(mediaName)
+else:
+    camera = None
+    if os.path.exists(mediaName):
+        for file in os.listdir(mediaName):
+            if random.randrange(0, 10, 1) <=2 and (file.endswith('.jpg') or file.endswith('.png')):
+                picList.append(os.path.join(mediaName, file))
+    else:
+        print("folder not exist")
+        quit()
+
 waitMillSec = 1
 useModel = True
 if useModel:
-    model = YOLO("best.pt")
+    model = YOLO("models/TopViewbestNew.pt")
 
-show = True
+show = False
 
 recFrame = 0
 recDivider = 5
@@ -30,16 +43,31 @@ tempPicFolderName = "OutputMouseBodyPic" + timeStr
 tempTxtFolderName = tempPicFolderName
 tempROIFolderName = tempPicFolderName
 if not os.path.exists(tempPicFolderName):
-		os.makedirs(tempPicFolderName)
+	os.makedirs(tempPicFolderName)
 if not os.path.exists(tempTxtFolderName):
-		os.makedirs(tempTxtFolderName)
+	os.makedirs(tempTxtFolderName)
 # tailColor = 200
 
-_, fristFrame = camera.read()
+def getFrame() -> tuple[bool, np.ndarray]:
+    if camera is None and len(picList) > 0:
+        pic = cv2.imread(picList[0])
+        picList.pop(0)
+        return True, pic
+    elif camera is not None:
+        return camera.read()
+    else:
+        return False, None
+
+_, fristFrame = getFrame()
+
 [height, width, _] = fristFrame.shape
 availableMask = np.ones(fristFrame.shape, dtype= np.uint8)
-while True:
+
+if os.path.exists("tempMask.jpg"):
     tempMask = cv2.imread("tempMask.jpg")
+else:
+    tempMask = None
+while True:
     if(type(tempMask) != type(None) and tempMask.shape == fristFrame.shape):
         availableMask = tempMask
         
@@ -57,7 +85,10 @@ while True:
 frameInd:int = 0
 
 while True:
-    ret, frame = camera.read()
+    ret, frame = getFrame()
+    if not ret:
+        break
+
     frame[availableMask == 0] = 255
     # frame = frame * availableMask
 
@@ -67,7 +98,7 @@ while True:
     # preFrame = frame.copy()
     
     if useModel:
-        results = model(frame, verbose=False, conf = 0.7)
+        results = model(frame, verbose=False)
         for result in results:
             for box in result.boxes:
                 class_id = result.names[box.cls[0].item()]
@@ -171,11 +202,12 @@ while True:
 
     frameInd+=1
     
-    if show and not useModel:
-        cv2.imshow("Subtractor", foreground_mask)
-        cv2.imshow("threshold", threshold)
     if show:
-        cv2.imshow("detection", frame)
+        if not useModel:
+            cv2.imshow("Subtractor", foreground_mask)
+            cv2.imshow("threshold", threshold)
+        else:
+            cv2.imshow("detection", frame)
         key = cv2.waitKey(waitMillSec) & 0xff
         # print(key)
         if key != 255:
@@ -183,23 +215,7 @@ while True:
                 break
             elif key == 32:
                 cv2.waitKey()
-        # elif key == 38:
-        #     tailColor += 2
-        #     print(tailColor)
-        # elif key == 40:
-        #     tailColor -= 2
-        #     print(tailColor)
-        # elif key == 0:
-        #     waitMillSec = 2
-        #     pass
-        # else:
-        #     waitMillSec = 17
-        # print("key press")
-    
-    # elif key == 120 or key == 88:
-    #     gROI = cv2.selectROI("ROI frame", frame, False)
-    #     ROI = frame[gROI[1]:(gROI[1] + gROI[3]), gROI[0]:(gROI[0] + gROI[2])]
 
-    #     cv2.waitKey()
-camera.release()
+if camera is not None:
+    camera.release()
 cv2.destroyAllWindows()
