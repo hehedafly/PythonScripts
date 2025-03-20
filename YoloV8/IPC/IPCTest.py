@@ -153,6 +153,7 @@ class SharedMemoryObj:
             applyName = bytes(shm_buffer[9:shm_buffer[8]+9]).decode()
             if applyName == self.care:
                 self.careindex = shm_buffer[7]#update care
+            shm_buffer[7] = 0xFF#clear apply
 
     def CheckOnlineClientsCount(self):
         global shm_buffer

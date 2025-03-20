@@ -21,10 +21,10 @@ from IPC import IPCTest
 from CircleSelect import CircleSelect
 from MessageBox import PyWinMessageBox
 
-from pyinstrument import Profiler
+# from pyinstrument import Profiler
 # region ------------------------------------------------meta Info-------------------------------------------
 CameraTypes = ["basler", "common", "video"]
-CameraType = "video"
+CameraType = "basler"
 videoPath = "01_17_1842outputraw.mp4"
 modelNmae = "models/TopViewBestWithAddtion.pt"
 confidenceCoefficient = 0.7
@@ -51,11 +51,8 @@ FontSize = 0.8
 FontThick = 2
 costTime = 0
 useCuda = torch.cuda.is_available()
-performanceAnalysis = True
 
 os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
-if not os.path.exists(videoSaveFolder):
-    os.mkdir(videoSaveFolder)
 # endregion ------------------------------------------------meta Info end-------------------------------------------
 
 # region ------------------------------------------------camera and log Info-------------------------------------------
@@ -157,16 +154,16 @@ class FrameGrabber(threading.Thread):
         self.record = False
         self.fps = fps
         self.recorded_frames = 0
-        self.frame_buffer = deque(maxlen=int(fps * 0.4))  # 帧缓存队列
+        self.frame_buffer = deque(maxlen=int(fps * 0.2))  # 帧缓存队列
         self.lock = threading.Lock()
         self.running = False
         
         # 动态调整参数
         self.interval = 0.95 * (1.0 / fps)  # 基础间隔缩短5%
-        self.adjustment_factor = 0.2         # 延迟补偿系数
+        self.adjustment_factor = 0.4         # 延迟补偿系数
         self.last_delay = 0.0
 
-    def releaseWriter(self):
+    def cameraRelease(self):
         if self.baslerCamera is not None:
             self.baslerCamera.StopGrabbing()
             self.baslerCamera.Close()
@@ -211,8 +208,7 @@ class FrameGrabber(threading.Thread):
             
             # 写入视频
             if self.writer != None and self.record:
-                # with self.lock:
-                if self.record:
+                with self.lock:
                     self.writer.write(frame)
             self.recorded_frames += 1 
             
@@ -221,8 +217,8 @@ class FrameGrabber(threading.Thread):
                 self.writerRelease = False
 
             # 更新缓存
-            # with self.lock:
-            self.frame_buffer.append(frame)
+            with self.lock:
+                self.frame_buffer.append(frame)
             
             # 计算延迟补偿
             process_time = time.time() - start_time
@@ -235,7 +231,7 @@ class FrameGrabber(threading.Thread):
             if sleep_time > 0:
                 time.sleep(sleep_time)
 
-        self.releaseWriter()
+        self.cameraRelease()
         if self.writer != None:
             self.writer.release()
 
@@ -266,18 +262,14 @@ class FrameGrabber(threading.Thread):
             self.record = True
 
     def stop(self):
-        print("thread stop")
         self.running = False
-
-    def VideoClearPublic(self):
-        self.writerRelease = True
 
     def VideoClear(self):
         with self.lock:
             if type(self.writer) == cv2.VideoWriter:
                 self.writer.release()
                 self.writer = None
-                self.record = False
+            self.record = False
 
     def Isrecording(self):
         return self.record
@@ -717,9 +709,9 @@ UnityShm = IPCTest.SharedMemoryObj('UnityShareMemoryTest', "server", "UnityProje
 if not UnityShm.InitBuffer():
     Quit()
 
-if performanceAnalysis:
-    profiler = Profiler()
-    profiler.start()
+
+# profiler = Profiler()
+# profiler.start()
 
 while CameraType != "basler" or (multiThread or camera.IsGrabbing()):
     ret, frame, frameInd = getFrame()
@@ -823,9 +815,10 @@ while CameraType != "basler" or (multiThread or camera.IsGrabbing()):
             unityFixedUscaledTimeOffset = 0
             sync = False
             if multiThread and grabber.Isrecording():
-                grabber.VideoClearPublic()
+                grabber.VideoClear()
             elif not multiThread:
                 VideoClear()
+            frame_count = 0
 
         else:#sync = true
             readMsg = UnityShm.ReadToStr(1)
@@ -885,8 +878,7 @@ while CameraType != "basler" or (multiThread or camera.IsGrabbing()):
                     cv2.imwrite(missedFrameSaveFolder + timestr + f"frame{frame_count}.jpg", frame)
 
         if recordPredictResult:
-            WriteFrame(rectedFrame, False)
-            # out.write(rectedFrame)
+            out.write(rectedFrame)
             outWritten = True
 
         if not hide:
@@ -944,9 +936,8 @@ while CameraType != "basler" or (multiThread or camera.IsGrabbing()):
 
     frame_count += 1
 
-if performanceAnalysis:
-    profiler.stop()
-    profiler.print()
+# profiler.stop()
+# profiler.print()
 
 if selectChanged and PyWinMessageBox.YesOrNo("save current Info?", "save & load") == 'YES':
     f_selectionSaveTxt.seek(0, 0)
@@ -960,8 +951,6 @@ f_selectionSaveTxt.close()
 if multiThread:
     grabber.stop()
     grabber.join()
-    print("thread released")
-
 elif camera != None:
     if CameraType == "basler":
         camera.StopGrabbing()
