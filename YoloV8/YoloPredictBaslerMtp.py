@@ -4,6 +4,7 @@ import os
 import threading
 import time
 import copy
+import queue
 # Third-party imports
 import torch
 import cv2
@@ -23,11 +24,11 @@ from MessageBox import PyWinMessageBox
 from pyinstrument import Profiler
 # region ------------------------------------------------meta Info-------------------------------------------
 CameraTypes = ["basler", "common", "video"]
-CameraType = "video"
-videoPath = "03_20_1550outputraw.mp4"
-modelNmae = "models/TopViewBodyBest.pt"
+CameraType = "basler"
+videoPath = "01_17_1842outputraw.mp4"
+modelNmae = "models/TopViewBodyBestWithAddition.pt"
 confidenceCoefficient = 0.7
-UnityshmCare = False
+UnityshmCare = True
 resolution = [1440,1080]
 recordResult = False
 recordPredictResult = False
@@ -36,7 +37,7 @@ videoSaveFolder = "outputVideo/"
 missedFrameSaveFolder = "missedFrames/"
 
 multiThread = True 
-Task: Literal['detect', 'track'] = 'detect'
+Task: Literal['detect', 'track'] = 'track'
 frame_rate_divider = 1  # 设置帧率除数
 missed_frame_rate_divider = 1
 frame_count = 0  # 初始化帧计数器
@@ -51,6 +52,8 @@ FontThick = 2
 costTime = 0
 useCuda = torch.cuda.is_available()
 performanceAnalysis = False
+task_queue = queue.Queue()
+result_queue = queue.Queue()
 
 os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 if not os.path.exists(videoSaveFolder):
@@ -93,6 +96,8 @@ else:
         exit()
 
 timestr = datetime.datetime.now().strftime("%m_%d_%H%M")
+if not os.path.exists(missedFrameSaveFolder):
+    os.mkdir(missedFrameSaveFolder)
 
 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
 if recordResult:
@@ -106,6 +111,42 @@ else:
     out = None
     outRaw = None
 defineCircle = CircleSelect.DefineCircle()
+
+# class YoloMultiThreadPredict(threading.Thread):
+#     def __init__(self, model):
+#         super.__init__()
+#         self.predictFrame = None
+#         self.predictFrameInd = -1
+#         self.predictedFrameInd = -1
+#         self.model:Model = model
+#         self.resultsMaxLen = 10
+#         self.results:deque = deque(maxlen=self.resultsMaxLen)
+#         self.lock = threading.Lock()
+#         self.runing = False
+    
+#     def Predict(self, _ind, _frame):
+#         if _ind != self.predictFrameInd and self.predictFrameInd == self.predictedFrameInd:
+#             with self.lock:
+#                 self.predictFrame = _frame
+#                 self.predictFrameInd = _ind
+    
+#     def GetPredicResult(self, _ind):
+#         if _ind > self.self.predictedFrameInd or _ind <= self.predictedFrameInd - len(self.results):
+#             return None
+#         else:
+#             return self.results[_ind - self.predictedFrameInd - 1]
+        
+#     def run(self):
+#         self.running = True
+
+#         while self.runing:
+#             self.results.append(model.Predict(Predictframe, task= model.Task))
+#             self.predictedFrameInd = self.predictFrameInd
+def YoloMultiThreadPredict():
+    while True:
+        frame, _ind = task_queue.get()
+        result = model.Predict(frame, task=Task)
+        result_queue.put((result, _ind))
 
 
 class FrameGrabber(threading.Thread):
@@ -639,6 +680,8 @@ if multiThread:
     grabber.start()
     if not UnityshmCare:
         grabber.startRecord()
+    threading.Thread(target=YoloMultiThreadPredict, daemon=True).start()
+
 
 def Quit():
     if multiThread:
@@ -835,6 +878,78 @@ while CameraType != "basler" or (multiThread or camera.IsGrabbing()):
 
     UnityShmPrepared:bool = (UnityShm.care != "" and sync) or UnityShm.care == ""
 
+    # if UnityShmPrepared:
+    resultInd = -1
+    if UnityShmPrepared:
+        if multiThread:
+            if task_queue.empty() and (lastframeInd < 0 or lastframeInd != frameInd):
+                task_queue.put((Predictframe, frameInd))
+
+            if not result_queue.empty():
+                results, resultInd = result_queue.get_nowait()
+                lastframeInd = resultInd
+                # print(resultInd)
+                syncInd += 1 if syncInd >= 0 else 0
+
+            else:
+                results = []
+                # resultInd = lastframeInd
+        else: 
+            results = model.Predict(Predictframe, task= Task)
+            resultInd = frameInd
+            syncInd += 1 if syncInd >= 0 else 0
+
+    else:
+        results = []
+
+    
+    rectedFrame[PreBoolMask] = selectMask[PreBoolMask]
+
+    if type(results) != type(None) and len(results) == 2:
+        realMouseCenter = results
+        rectedFrame = cv2.circle(rectedFrame, realMouseCenter, 5, (255,255,0), 10)
+        
+        if recordPredictResult:
+            WriteFrame(rectedFrame, False)
+            # out.write(rectedFrame)
+            outWritten = True
+
+        if not hide:
+            cv2.putText(rectedFrame, f"fps: {fps:.2f}", (20, 20), cv2.FONT_HERSHEY_SIMPLEX, FontSize, (0, 0, 255), FontThick)
+            cv2.imshow("frame", rectedFrame)
+            cv2.waitKey(1)
+    else:
+        
+    # index = index +1
+        realMouseCenter = [-1, -1]
+        missed_frame_count += 1
+        if recordMissframe and UnityShmPrepared and missed_frame_count % missed_frame_rate_divider == 0:
+            if not multiThread or (multiThread and grabber.record):
+                cv2.imwrite(missedFrameSaveFolder + timestr + f"frame{frame_count}.jpg", frame)
+
+    frame_count += 1
+    
+    if not simulate:
+        if resultInd != -1 and type(results) != type(None) and results[0] >= 0:
+            # UnityShm.WriteContent("pos" + ";".join([str(i) for i in xyxy]), True)
+        # UnityShm.WriteClear()
+            temp = realMouseCenter.copy()
+            temp.append(syncInd if syncInd >= 0 else -1)
+            temp.append(int((time.time() - ProcessStartTime) * 100))
+            temp.append(resultInd)
+            simulateMousePos[2] = syncInd if syncInd >= 0 else -1
+            UnityShm.WriteContent("pos:" + ";".join([str(i) for i in temp]))
+            # print(f"pos:{realMouseCenter}")
+
+    # break
+    else:
+        simulateMousePos[2] = syncInd if syncInd >= 0 else -1
+        simulateMousePos[3] = int((time.time() - ProcessStartTime) * 100)
+        simulateMousePos[4] = frameInd
+        # print(simulateMousePos)
+        UnityShm.WriteContent("pos:" + ";".join([str(i) for i in simulateMousePos]))
+
+
     if (frame_count + 1) % 30 == 0:
         costTime = time.time() - startTime
         # print(str(60/costTime)+"fps")
@@ -842,62 +957,11 @@ while CameraType != "basler" or (multiThread or camera.IsGrabbing()):
         if costTime > 0:
             fps = 30/costTime
 
-    # if UnityShmPrepared:
-    if UnityShmPrepared:
-        if lastframeInd < 0 or lastframeInd != frameInd:    
-            results = model.Predict(Predictframe, task= Task)
-    else:
-        results = []
-    lastframeInd = frameInd
-    syncInd += 1 if syncInd >= 0 else 0
-    if simulate:
-        simulateMousePos[2] = syncInd if syncInd >= 0 else -1
-        simulateMousePos[3] = int((time.time() - ProcessStartTime) * 100)
-        simulateMousePos[4] = frameInd
-        # print(simulateMousePos)
-        UnityShm.WriteContent("pos:" + ";".join([str(i) for i in simulateMousePos]))
-    # index = index +1
-    rectedFrame[PreBoolMask] = selectMask[PreBoolMask]
-
-    # for result in results:
-    #     for box in result.boxes:
-    #         class_id = result.names[box.cls[0].item()]
-    #         # if class_id == 0:
-    #         xyxy = np.array(box.xyxy[0].tolist(), int)
-    #         realMouseCenter = [int((xyxy[0]+xyxy[2])*0.5), int((xyxy[1]+xyxy[3])*0.5)]
-    if type(results) != type(None) and len(results) == 2:
-        realMouseCenter = results
-        rectedFrame = cv2.circle(rectedFrame, realMouseCenter, 5, (255,255,0), 10)
-        if not simulate:
-            # UnityShm.WriteContent("pos" + ";".join([str(i) for i in xyxy]), True)
-            # UnityShm.WriteClear()
-            temp = realMouseCenter.copy()
-            temp.append(syncInd if syncInd >= 0 else -1)
-            temp.append(int((time.time() - ProcessStartTime) * 100))
-            temp.append(frameInd)
-            simulateMousePos[2] = syncInd if syncInd >= 0 else -1
-            UnityShm.WriteContent("pos:" + ";".join([str(i) for i in temp]))
-
-        # break
-    else:
-        realMouseCenter = [-1, -1]
-        missed_frame_count += 1
-        if recordMissframe and UnityShmPrepared and missed_frame_count % missed_frame_rate_divider == 0:
-            if not multiThread or (multiThread and grabber.record):
-                cv2.imwrite(missedFrameSaveFolder + timestr + f"frame{frame_count}.jpg", frame)
-
-    if recordPredictResult:
-        WriteFrame(rectedFrame, False)
-        # out.write(rectedFrame)
-        outWritten = True
-
-
     _time = time.time()
     if not hide:
-        cv2.putText(rectedFrame, f"fps: {fps:.2f}", (20, 20), cv2.FONT_HERSHEY_SIMPLEX, FontSize, (0, 0, 255), FontThick)
-
-        cv2.imshow("frame", rectedFrame)
-        cv2.waitKey(1)
+        # cv2.putText(rectedFrame, f"fps: {fps:.2f}", (20, 20), cv2.FONT_HERSHEY_SIMPLEX, FontSize, (0, 0, 255), FontThick)
+        # cv2.imshow("frame", rectedFrame)
+        # cv2.waitKey(1)
         
         if keyboard.is_pressed("shift+h"):
             if _time > hideAltTime:
@@ -954,8 +1018,6 @@ while CameraType != "basler" or (multiThread or camera.IsGrabbing()):
     if keyboard.is_pressed("shift+esc"):
         if not sync or PyWinMessageBox.YesOrNo("Unity Project still online, force exit?", "Warning") == "YES":
             break
-
-    frame_count += 1
 
 if performanceAnalysis:
     profiler.stop()

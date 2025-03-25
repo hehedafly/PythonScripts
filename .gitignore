@@ -12,3 +12,7 @@ ultralytics-8.2.95/
 *.jpg
 *.txt
 *.7z
+LogEventLogs/lyf_01.evt
+*.evt
+*.csv
+/YoloV8/runs
