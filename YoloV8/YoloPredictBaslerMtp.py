@@ -24,7 +24,7 @@ from MessageBox import PyWinMessageBox
 from pyinstrument import Profiler
 # region ------------------------------------------------meta Info-------------------------------------------
 CameraTypes = ["basler", "common", "video"]
-CameraType = "basler"
+CameraType = "video"
 videoPath = "01_17_1842outputraw.mp4"
 modelNmae = "models/TopViewBodyBestWithAddition.pt"
 confidenceCoefficient = 0.7
@@ -926,6 +926,11 @@ while CameraType != "basler" or (multiThread or camera.IsGrabbing()):
         if recordMissframe and UnityShmPrepared and missed_frame_count % missed_frame_rate_divider == 0:
             if not multiThread or (multiThread and grabber.record):
                 cv2.imwrite(missedFrameSaveFolder + timestr + f"frame{frame_count}.jpg", frame)
+
+        if not hide:
+            cv2.putText(rectedFrame, f"fps: {fps:.2f}", (20, 20), cv2.FONT_HERSHEY_SIMPLEX, FontSize, (0, 0, 255), FontThick)
+            cv2.imshow("frame", rectedFrame)
+            cv2.waitKey(1)
 
     frame_count += 1
     
