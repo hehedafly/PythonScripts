@@ -26,20 +26,21 @@ from pyinstrument import Profiler
 CameraTypes = ["basler", "common", "video"]
 CameraType = "video"
 videoPath = "01_17_1842outputraw.mp4"
-modelNmae = "models/TopViewBodyBestWithAddition.pt"
-confidenceCoefficient = 0.7
+# modelNmae = "models/TopViewBodyBestWithAddition.pt"
+modelNmae = "models/TopViewMiniscopeBodyBestWithAddition.pt"
+confidenceCoefficient = 0.6
 UnityshmCare = True
 resolution = [1440,1080]
 recordResult = False
 recordPredictResult = False
-recordMissframe = True
+recordMissframe = False
 videoSaveFolder = "outputVideo/"
 missedFrameSaveFolder = "missedFrames/"
 
 multiThread = True 
 Task: Literal['detect', 'track'] = 'track'
 frame_rate_divider = 1  # 设置帧率除数
-missed_frame_rate_divider = 1
+missed_frame_rate_divider = 10
 frame_count = 0  # 初始化帧计数器
 missed_frame_count = 0
 hide = False
@@ -196,7 +197,7 @@ class FrameGrabber(threading.Thread):
 
         self.record = False
         self.fps = fps
-        self.recorded_frames = 0
+        self.exposuredFrames = 0
         self.frame_buffer = deque(maxlen=int(fps * 0.4))  # 帧缓存队列
         self.lock = threading.Lock()
         self.running = False
@@ -254,7 +255,7 @@ class FrameGrabber(threading.Thread):
                 # with self.lock:
                 if self.record:
                     self.writer.write(frame)
-            self.recorded_frames += 1 
+            self.exposuredFrames += 1 
             
             if self.writerRelease:
                 self.VideoClear()
@@ -286,7 +287,7 @@ class FrameGrabber(threading.Thread):
         with self.lock:
             if len(self.frame_buffer):
                 # 返回最新帧并保留缓存
-                return True,self.recorded_frames, self.frame_buffer[-1]
+                return True,self.exposuredFrames, self.frame_buffer[-1]
             return False, -1, None
         
     def returnCameraStatus(self):
@@ -364,7 +365,6 @@ class Model():
             self.model = YOLO(modelName)
             self.modelType = "onnx"
         else:
-            print("目前仅支持yolo(.pt)模型，onnx模型和openVINO模型")
             print("目前仅支持yolo(.pt)模型，onnx模型")
             # print("目前仅支持yolo(.pt)模型，openVINO模型")
             exit()
@@ -924,8 +924,7 @@ while CameraType != "basler" or (multiThread or camera.IsGrabbing()):
         realMouseCenter = [-1, -1]
         missed_frame_count += 1
         if recordMissframe and UnityShmPrepared and missed_frame_count % missed_frame_rate_divider == 0:
-            if not multiThread or (multiThread and grabber.record):
-                cv2.imwrite(missedFrameSaveFolder + timestr + f"frame{frame_count}.jpg", frame)
+            cv2.imwrite(missedFrameSaveFolder + timestr + f"frame{frame_count}.jpg", frame)
 
         if not hide:
             cv2.putText(rectedFrame, f"fps: {fps:.2f}", (20, 20), cv2.FONT_HERSHEY_SIMPLEX, FontSize, (0, 0, 255), FontThick)
@@ -955,12 +954,13 @@ while CameraType != "basler" or (multiThread or camera.IsGrabbing()):
         UnityShm.WriteContent("pos:" + ";".join([str(i) for i in simulateMousePos]))
 
 
-    if (frame_count + 1) % 30 == 0:
+    if (frame_count + 1) % 60 == 0:
         costTime = time.time() - startTime
         # print(str(60/costTime)+"fps")
         startTime = time.time()
         if costTime > 0:
-            fps = 30/costTime
+            fps = 60/costTime
+            UnityShm.UpdateOnlineStatus()#作为server不需要检查返回值
 
     _time = time.time()
     if not hide:

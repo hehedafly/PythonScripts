@@ -2,6 +2,7 @@ import os
 import cv2
 import time
 import random
+import copy
 from ultralytics import YOLO
 from math import*
 import numpy as np
@@ -13,9 +14,9 @@ MOG2_subtractor = cv2.createBackgroundSubtractorMOG2(detectShadows = False)
 
 bg_subtractor=MOG2_subtractor
 
-mediaName = "missedFrames"
+mediaName = "03_20_1550outputraw.mp4"
 mediaNamePure = mediaName.split('.')[0:-1][0] if mediaName.endswith('.mp4') else mediaName
-useModel = False
+useModel = True
 conf = 0.4
 sample = 0.2
 minArea = 800
@@ -37,20 +38,35 @@ else:
 
 waitMillSec = 0
 
-show = False
-
+show = True
+PoseExtract = True if useModel else False
+PoseExtractDivider = 20
 recFrame = 0
 recDivider = 1
 timeStr = time.strftime("%m%d%H%M%S", time.gmtime())
-tempPicFolderName = "OutputMouseBodyPic" + timeStr
-# tempTxtFolderName = "OutputMouseBodyTxt" + timeStr
-tempTxtFolderName = tempPicFolderName
-tempROIFolderName = tempPicFolderName
-if not os.path.exists(tempPicFolderName):
-	os.makedirs(tempPicFolderName)
-if not os.path.exists(tempTxtFolderName):
-	os.makedirs(tempTxtFolderName)
+if not PoseExtract:
+    tempPicFolderName = "OutputMouseBodyPic" + timeStr
+    # tempTxtFolderName = "OutputMouseBodyTxt" + timeStr
+    tempTxtFolderName = tempPicFolderName
+    tempROIFolderName = tempPicFolderName
+    if not os.path.exists(tempPicFolderName):
+        os.makedirs(tempPicFolderName)
+    if not os.path.exists(tempTxtFolderName):
+        os.makedirs(tempTxtFolderName)
 # tailColor = 200
+else:
+    show = False
+    continueShoot = True
+    recCount = 0
+
+    tempPosePicFolderName = "PoseExtract" + timeStr
+    # tempTxtFolderName = "OutputMouseBodyTxt" + timeStr
+    tempPosTxtFolderName = tempPosePicFolderName
+    tempPoseROIFolderName = tempPosePicFolderName
+    if not os.path.exists(tempPosePicFolderName):
+        os.makedirs(tempPosePicFolderName)
+    if not os.path.exists(tempPosTxtFolderName):
+        os.makedirs(tempPosTxtFolderName)
 
 def getFrame() -> tuple[bool, np.ndarray, str]:
     if camera is None and len(picList) > 0:
@@ -59,7 +75,8 @@ def getFrame() -> tuple[bool, np.ndarray, str]:
         
         return True, pic, fname
     elif camera is not None:
-        return camera.read(), ""
+        ret, frame = camera.read()
+        return ret, frame, ""
     else:
         return False, None, ""
 
@@ -67,6 +84,114 @@ _, fristFrame, _ = getFrame()
 
 [height, width, _] = fristFrame.shape
 availableMask = np.ones(fristFrame.shape, dtype= np.uint8)
+
+# PosKeyPointsName = ["鼻尖", "左耳", "右耳", "尾根"]
+# PosKeyPointsName = ["鼻尖", "头顶", "身体", "尾根"]
+PosKeyPointsName = ["tip", "head", "body", "tailbase"]
+PosKeyPointsCount = len(PosKeyPointsName)
+clickColorLs:list[list[int]] = []
+for i in range(1, PosKeyPointsCount + 1):
+    tempcolor = i * (255 // PosKeyPointsCount)
+    clickColorLs.append([tempcolor, 255 - abs(255 - int(tempcolor * 2)), 255 - tempcolor])
+
+# def ClickEvent(event, x, y, flags, posLs:list[list[int]], colorMask:np.ndarray):
+def ClickEvent(event, x, y, flags, param):
+    # if cv2.getWindowProperty("poseMark") != -1:
+    tempMousePos = param[0]
+    tempMousePos[0], tempMousePos[1] = x, y
+
+    if posLs != None and len(posLs) < PosKeyPointsCount:
+        if event == cv2.EVENT_LBUTTONDOWN:#可见点
+            posLs.append([x, y, 2])
+            # cv2.circle(colorMask, (x, y), 2, clickColorLs[len(posLs)], 4)
+            # colorMask
+        elif event == cv2.EVENT_RBUTTONDOWN:#不可见点
+            posLs.append([x, y, 1])
+            # cv2.circle(colorMask, (x, y), 2, clickColorLs[len(posLs)], 1)
+        # elif event == -1:
+        #     posLs.pop()
+        cv2.waitKey(1)
+
+def DrawPosPoints(rawFrame:np.ndarray, x, y, w, h):
+    global posLs
+    global recCount
+    global width
+    global height
+    global continueShoot
+    posLs = []
+    # tempMaskLs:list[np.ndarray] = [] 
+    scaled = 4
+    h = min(h + 20, height - y)
+    w = min(w + 20, width - x)
+    img = rawFrame[y:y+h, x:x+w]
+    resizedImg = cv2.resize(img, (img.shape[1] * scaled, img.shape[0] * scaled), interpolation=cv2.INTER_LINEAR)
+    tempMask = np.zeros(resizedImg.shape)
+
+    enableDel:bool = True
+    mousePos = [-1, -1]
+
+    cv2.imshow("poseMark", img)
+    cv2.setMouseCallback("poseMark", ClickEvent, param=[mousePos])
+    while(True):
+        cv2.waitKey(1)
+
+        if not keyboard.is_pressed('backspace'):
+            enableDel = True
+        if keyboard.is_pressed('shift+n') and continueShoot == True:
+            continueShoot = False
+            print("stop shooting")
+        if keyboard.is_pressed("shift+esc"):
+            exit()
+
+        if len(posLs):
+            tempMask = np.zeros(resizedImg.shape)
+            for i in range(len(posLs)):
+                nowRadius = scaled * 2 if posLs[i][2] == 1 else scaled
+                nowThick = 2  if posLs[i][2] == 1 else scaled * 2
+                cv2.circle(tempMask, posLs[i][0:2], nowRadius, clickColorLs[i], nowThick)
+        bool_mask = (tempMask > 0).astype(bool)
+        tempImg = resizedImg.copy()
+        tempImg[bool_mask] = tempMask[bool_mask]
+        if len(posLs) < len(PosKeyPointsName):
+            cv2.putText(tempImg, PosKeyPointsName[len(posLs)], (mousePos[0],mousePos[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+        cv2.imshow("poseMark", tempImg)
+        if keyboard.is_pressed('backspace') and enableDel:
+            enableDel = False
+            if len(posLs):
+                posLs.pop()
+                # print(f"delet one dot, now:{len(posLs)}")
+                tempMask = np.zeros(resizedImg.shape)
+                for i in range(len(posLs)):
+
+                    cv2.circle(tempMask, posLs[i][0:2], 2, clickColorLs[i], posLs[i][2]*2)
+            bool_mask = (tempMask > 0).astype(bool)
+            tempImg = resizedImg.copy()
+            tempImg[bool_mask] = tempMask[bool_mask]
+            cv2.imshow("poseMark", tempImg)
+            # tempMask = np.zeros(img.shape) if len(tempMaskLs) == 0 else tempMaskLs[-1]
+        elif keyboard.is_pressed('enter'):
+            if len(posLs) == PosKeyPointsCount:
+                tempPointsStrLs:list[str] = []
+                for points in posLs:
+                    _x:float = float(points[0]/scaled+x)/width
+                    _y:float = float(points[1]/scaled+y)/height
+                    tempPointsStrLs.append(" ".join([str(i) for i in [_x, _y, points[2]]]))
+                fileName = mediaNamePure + str(int(recCount)) + "pose"
+                cv2.imwrite(tempPoseROIFolderName +"/"+ fileName +".png", tempImg)
+                fileName = mediaNamePure +str(int(recCount))
+                cv2.imwrite(tempPosTxtFolderName +"/"+ fileName +".jpg", rawFrame)
+                with open(tempPosTxtFolderName +"/"+ fileName +".txt", "w+") as file:
+                    file.write("0 "+ " ".join([str(i) for i in [(x + w*0.5)/width, (y + h*0.5)/height, w/width, h/height]]) + " " + " ".join(tempPointsStrLs))
+                recCount += 1
+                print(recCount)
+
+                cv2.destroyWindow("poseMark")
+                break
+            elif len(posLs) == 0:
+                 #跳过
+                cv2.destroyWindow("poseMark")
+                break
+
 
 if os.path.exists("tempMask.jpg"):
     tempMask = cv2.imread("tempMask.jpg")
@@ -88,6 +213,7 @@ while True:
         break
 
 frameInd:int = 0
+PoseExtractFrameInd:int = 0
 
 while True:
     ret, frame, fname = getFrame()
@@ -102,7 +228,7 @@ while True:
     # frame[mask] = preFrame[mask]
     # preFrame = frame.copy()
     foreground_mask = bg_subtractor.apply(frame)
-    modelPredictfail = False
+    # modelPredictfail = False
     
     if useModel:
         # foreground_mask = bg_subtractor.apply(frame)
@@ -119,7 +245,7 @@ while True:
         for result in results:
             if not len(result.boxes):
                 print(f"No object detected in file {fname}")
-                modelPredictfail = True
+                # modelPredictfail = True
             for box in result.boxes:
                 class_id = result.names[box.cls[0].item()]
                 # if class_id == 0:
@@ -140,47 +266,61 @@ while True:
                 # if show:
                 #     cv2.rectangle(frame, (x,y), (x+w, y+h), (0,0,255), 2)
                 # recFrame+=1
+                if not PoseExtract:
 
-                mouseBlock = np.uint8(np.sum(frame[y:y+h, x:x+w, :], axis=2) / 3)
-                _, tempResult = cv2.threshold(mouseBlock, np.max(mouseBlock) * 0.45, 255, cv2.THRESH_BINARY_INV)
-                # _, tempResult = cv2.threshold(tempResult, np.max(mouseBlock) * 0.25, 255, cv2.THRESH_BINARY)
-                tempResult = cv2.medianBlur(tempResult, 7) 
-                # tempResultMixed = tempResult* np.right_shift(threshold[y:y+h, x:x+w], 7)
-                tempResultMixed = cv2.dilate(tempResult, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3,3)), iterations = 4)
-                # tempContours, tempHier = cv2.findContours(tempResultMixed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                tempContours, tempHier = cv2.findContours(tempResult, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                # if show:
-                #     cv2.imshow("tempChildPic",tempResult)
-                #     # cv2.imshow("predicResult", cv2.rectangle(frame, (x,y), (x+w, y+h), (255, 0, 0), 2))
-                #     # cv2.imshow("tempThreshold", threshold[y:y+h, x:x+w])
-                #     cv2.imshow("tempMixedResult",tempResultMixed)
-                for tempContour in tempContours:
-                    tempChildArea = cv2.contourArea(tempContour)
-                    if tempChildArea > minArea and tempChildArea < maxArea:
-                        # print(tempChildArea)
-                        (_x,_y,_w,_h) = cv2.boundingRect(tempContour)
-                        if recFrame % recDivider == 0 and 2.5 > _w/_h > 0.4: 
-                            fileName = mediaNamePure + str(int(recFrame / recDivider)) + "ROI"
-                            cv2.imwrite(tempROIFolderName +"/"+ fileName +".png", frame[y+_y:y+_y+_h, x+_x:x+_x+_w])
-                            fileName = mediaNamePure +str(int(recFrame / recDivider))
-                            cv2.imwrite(tempTxtFolderName +"/"+ fileName +".jpg", frame)
-                            with open(tempTxtFolderName +"/"+ fileName +".txt", "w+") as file:
-                                file.write("0 "+ " ".join([str(i) for i in [(x+_x + _w*0.5)/width, (y+_y + _h*0.5)/height, _w/width, _h/height]]))
-                            print("Marked " + str(int(recFrame / recDivider)+1) + "Frames")
+
+                    mouseBlock = np.uint8(np.sum(frame[y:y+h, x:x+w, :], axis=2) / 3)
+                    _, tempResult = cv2.threshold(mouseBlock, np.max(mouseBlock) * 0.45, 255, cv2.THRESH_BINARY_INV)
+                    # _, tempResult = cv2.threshold(tempResult, np.max(mouseBlock) * 0.25, 255, cv2.THRESH_BINARY)
+                    tempResult = cv2.medianBlur(tempResult, 7) 
+                    # tempResultMixed = tempResult* np.right_shift(threshold[y:y+h, x:x+w], 7)
+                    tempResultMixed = cv2.dilate(tempResult, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3,3)), iterations = 4)
+                    # tempContours, tempHier = cv2.findContours(tempResultMixed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    tempContours, tempHier = cv2.findContours(tempResult, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    # if show:
+                    #     cv2.imshow("tempChildPic",tempResult)
+                    #     # cv2.imshow("predicResult", cv2.rectangle(frame, (x,y), (x+w, y+h), (255, 0, 0), 2))
+                    #     # cv2.imshow("tempThreshold", threshold[y:y+h, x:x+w])
+                    #     cv2.imshow("tempMixedResult",tempResultMixed)
+                    for tempContour in tempContours:
+                        tempChildArea = cv2.contourArea(tempContour)
+                        if tempChildArea > minArea and tempChildArea < maxArea:
+                            # print(tempChildArea)
+                            (_x,_y,_w,_h) = cv2.boundingRect(tempContour)
+                            if recFrame % recDivider == 0 and 2.5 > _w/_h > 0.4: 
+                                fileName = mediaNamePure + str(int(recFrame / recDivider)) + "ROI"
+                                cv2.imwrite(tempROIFolderName +"/"+ fileName +".png", frame[y+_y:y+_y+_h, x+_x:x+_x+_w])
+                                fileName = mediaNamePure +str(int(recFrame / recDivider))
+                                cv2.imwrite(tempTxtFolderName +"/"+ fileName +".jpg", frame)
+                                with open(tempTxtFolderName +"/"+ fileName +".txt", "w+") as file:
+                                    file.write("0 "+ " ".join([str(i) for i in [(x+_x + _w*0.5)/width, (y+_y + _h*0.5)/height, _w/width, _h/height]]))
+                                print("Marked " + str(int(recFrame / recDivider)+1) + "Frames")
+                            
+                                if show:
+                                    cv2.rectangle(frame, (x+_x,y+_y), (x+_x+_w, y+_y+_h), (0,0,255), 2)
+                                    cv2.putText(frame, str(tempChildArea), (xyxy[0], xyxy[1]), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
+                                
+                                recFrame+=1
+                                break
+                        else:
                             if show:
                                 cv2.rectangle(frame, (x+_x,y+_y), (x+_x+_w, y+_y+_h), (0,0,255), 2)
                                 cv2.putText(frame, str(tempChildArea), (xyxy[0], xyxy[1]), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
-                            recFrame+=1
-                            break
-                    else:
-                        if show:
-                            cv2.rectangle(frame, (x+_x,y+_y), (x+_x+_w, y+_y+_h), (0,0,255), 2)
-                            cv2.putText(frame, str(tempChildArea), (xyxy[0], xyxy[1]), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
-                        # cv2.imwrite(tempTxtFolderName +"/"+ fileName +".jpeg", frame)
-                        print(f"area not fit: {tempChildArea}")
+                            # cv2.imwrite(tempTxtFolderName +"/"+ fileName +".jpeg", frame)
+                            print(f"area not fit: {tempChildArea}")
+                else:
+                    if keyboard.is_pressed('n') and continueShoot == False:
+                        print("continue shooting")
+                        continueShoot = True
+                    
+                    if continueShoot or PoseExtractFrameInd % PoseExtractDivider == 0:
+                        DrawPosPoints(frame, max(min(x - 10, width), 0), max(min(y - 10, width), 0), w, h)
+
+                    PoseExtractFrameInd += 1
                         
     
-    if not useModel or modelPredictfail:
+    # if not useModel or modelPredictfail:
+    if not useModel:
 
         # 每一帧既用于计算前景掩码，也用于更新背景。
         # 如果大于240像素，则阈值设为255，如果小于则设为0    # 创建二值图像，它只包含白色和黑色像素
@@ -226,7 +366,8 @@ while True:
                             cv2.imwrite(tempTxtFolderName +"/"+ fileName +".jpg", frame)
                             with open(tempTxtFolderName +"/"+ fileName +".txt", "w+") as file:
                                 file.write("0 "+ " ".join([str(i) for i in [(x+_x + _w*0.5)/width, (y+_y + _h*0.5)/height, _w/width, _h/height]]))
-                            print("Marked " + str(int(recFrame / recDivider)+1) + "Frames" + f"{"Detected" if modelPredictfail else ""}")
+                            # print("Marked " + str(int(recFrame / recDivider)+1) + "Frames" + f"{"Detected" if modelPredictfail else ""}")
+                            print("Marked " + str(int(recFrame / recDivider)+1) + "Frames")
                         
                         if show:
                             cv2.rectangle(frame, (x+_x,y+_y), (x+_x+_w, y+_y+_h), (0,0,255), 2)

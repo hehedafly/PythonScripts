@@ -53,21 +53,27 @@ class SharedMemoryObj:
     between every message: 0xFF, 0xFF
     '''
 
-    def __init__(self, shm_name='default', name = "custom", care = "", size=32+5*16*1024):
+    def __init__(self, shm_name='default', name = "custom", care = "", size=32+5*16*1024, heartbeat = False):
         global shm_buffer
 
         self.shm = None
         self.name = name
         self.care = care
-        self.index = -1
+        self.UID = -1
         self.careindex = -1
         self.contentbegin = 0
         self.maxClientNum = 4
+
+        self.maxOfflineTick = 5
+        self.offlineTick = 0
+        self.careofflineTick = 0
+        self.careOnlineStatus = [-1] * self.maxClientNum
+        self.clientOfflineTick = [-1] * self.maxClientNum
         try:
             self.shm = shared_memory.SharedMemory(name=shm_name, create=(name == "server"), size=size)
             if name == "server":
                 print("shared memory \""+shm_name+"\" created with size ≈"+str(int(size/1024))+ "KB")
-                self.index = 0
+                self.UID = 0
             else:
                 print("mapped to "+shm_name)
         except:
@@ -96,6 +102,7 @@ class SharedMemoryObj:
         self.writtenMark = -1
 
         self.unwrittenMsg = []
+        self.heartbeat = heartbeat
 
         shm_buffer[0:32] = bytearray([0] * 32)
         shm_buffer[32:] = bytearray([0xFF] * len(shm_buffer[32:]))
@@ -108,7 +115,7 @@ class SharedMemoryObj:
                 self.shm.close()
                 self.shm.unlink()
             else:#应添加server检查care部分
-                self.shm.buf[3 + self.index] = bytearray([0] * len(self.shm.buf[3 + self.index]))
+                self.shm.buf[3 + self.UID] = bytearray([0] * len(self.shm.buf[3 + self.UID]))
                 self.shm.buf[2] = self.shm.buf[2] - 1
                 self.shm.close()
         print("server offline")
@@ -128,13 +135,13 @@ class SharedMemoryObj:
             if shm_buffer[2] < maxNum:
                 for i in range(maxNum):
                     if shm_buffer[3 + i] == 0:# client status 0 = offline 1 = online
-                        self.index = i + 1 #client index 1-4
+                        self.UID = i + 1 #client index 1-4
                         shm_buffer[3 + i] = 1
 
             else:
                 print("")#已满
                 return False
-        self.writeBufferStartPos = self.writeBufferStartPosAll[self.index]
+        self.writeBufferStartPos = self.writeBufferStartPosAll[self.UID]
         shm_buffer[self.writeBufferStartPos : (self.writeBufferStartPos+15)] = bytearray([0] * 15)
         self.writtenMark = 0
         self.newMessageStartPos = 15
@@ -143,7 +150,7 @@ class SharedMemoryObj:
 
     def ApplyForCare(self):
         global shm_buffer
-        shm_buffer[7] = self.index
+        shm_buffer[7] = self.UID
         shm_buffer[8] = len(self.name)
         shm_buffer[9:len(self.name)] = self.name.encode()
     
@@ -163,9 +170,57 @@ class SharedMemoryObj:
         global shm_buffer
         clientIDs: list[int] = []
         for i in range(0, self.maxClientNum + 1):
-            if i != self.index and shm_buffer[3 + i - 1] == 1:
+            if i != self.UID and shm_buffer[3 + i - 1] >= 1:
                 clientIDs.append(i)
         return clientIDs
+    
+    def UpdateOnlineStatus(self) -> int:
+        global shm_buffer
+        if not self.heartbeat:
+            return 1
+
+        if self.name != "server":
+            if shm_buffer[0] == 0:
+                return -1  # Server offline
+            
+            # Update client's own status
+            client_status_idx = 2 + self.UID
+            shm_buffer[client_status_idx] = (shm_buffer[client_status_idx] % 256) + 1
+
+            # Update server status tracking
+            if shm_buffer[0] != self.ca[0]:
+                self.careOnlineStatus[0] = shm_buffer[0]
+                self.offlineTick = 0
+            else:
+                self.offlineTick += 1
+
+            # Check offline timeout
+            if self.offlineTick == self.maxOfflineTick:
+                self.offlineTick = 0
+                return -2
+            else:
+                return 1
+        else:
+            # Update server heartbeat
+            shm_buffer[0] = (shm_buffer[0] % 256) + 1
+
+            # Monitor client statuses
+            for i in range(self.maxClientNum):
+                client_idx = 3 + i
+                if shm_buffer[client_idx] > 0:
+                    if shm_buffer[client_idx] != self.careOnlineStatus[i]:
+                        self.careOnlineStatus[i] = shm_buffer[client_idx]
+                        self.clientOfflineTick[i] = 0
+                    else:
+                        self.clientOfflineTick[i] += 1
+
+                        # Handle client timeout
+                        if self.clientOfflineTick[i] >= self.maxOfflineTick:
+                            shm_buffer[2] = (shm_buffer[2] - 1) % 256  # Ensure byte wrap
+                            shm_buffer[client_idx] = 0
+                            self.clientOfflineTick[i] = 0
+                            print("client "+str(i+1)+" offline")
+            return 1
     
     def WriteClear(self, clearPos = 0, esayclear = False):#clearPos: 0: all, 1-messages: count of latest messages shall be saved 
         global shm_buffer
@@ -237,7 +292,7 @@ class SharedMemoryObj:
         if self.careindex != -1: #check others' readmark is not necessary, just continue writing until overwrite then clear in next write
             return  
         else:#if cared one have read all the msg, clear all
-            careIdPos = self.index if self.index < self.careindex else self.index - 1
+            careIdPos = self.UID if self.UID < self.careindex else self.UID - 1
             careReadmark = BytesToInt(shm_buffer[self.writeBufferStartPos + 1 + careIdPos * 2 : self.writeBufferStartPos + 1 + careIdPos * 2 + 2])
             if self.writtenMark >= 20 and self.writtenMark - careReadmark <= 10:
                 self.WriteClear(self.writtenMark - careReadmark)
@@ -257,7 +312,7 @@ class SharedMemoryObj:
         #         readPos = self.writeBufferStartPosAll[tempId]
         readPos = self.writeBufferStartPosAll[readId]
         readable = shm_buffer[readPos]
-        writePos = self.index if self.index < readId else self.index - 1
+        writePos = self.UID if self.UID < readId else self.UID - 1
         if readable:
             readmark = BytesToInt(shm_buffer[readPos + 1 + writePos * 2 : readPos + 1 + writePos * 2 + 2].tobytes())
             writemark = BytesToInt(shm_buffer[readPos + 9 : readPos + 11].tobytes())
@@ -323,7 +378,7 @@ class SharedMemoryObj:
         # cv2.imshow("msgs", tempData)
         cv2.waitKey(0)
 
-    def Start(self):
+    def TestStart(self):
         self.InitBuffer()
         while True:
             if keyboard.is_pressed('esc'):

@@ -1,0 +1,6 @@
+train: D:/Unity/PythonFiles/YoloV8/YoloPoseTrainData/images/train
+val: D:/Unity/PythonFiles/YoloV8/YoloPoseTrainData/images/val
+kpt_shape: [4, 3] 
+
+nc: 1
+names: ['mouseWithMiniscope']

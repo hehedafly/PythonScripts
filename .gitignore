@@ -16,3 +16,5 @@ LogEventLogs/lyf_01.evt
 *.evt
 *.csv
 /YoloV8/runs
+*.pkl
+*.cache
