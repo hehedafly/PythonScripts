@@ -18,3 +18,5 @@ LogEventLogs/lyf_01.evt
 /YoloV8/runs
 *.pkl
 *.cache
+/打印图
+/tempOutput
