@@ -1,6 +1,7 @@
 import datetime
 import math
 import os
+import socket
 import threading
 import time
 import copy
@@ -26,11 +27,17 @@ from pyinstrument import Profiler
 CameraTypes = ["basler", "common", "video"]
 CameraType = "video"
 videoPath = "01_17_1842outputraw.mp4"
-# modelNmae = "models/TopViewBodyBestWithAddition.pt"
 modelNmae = "models/TopViewMiniscopeBodyBestWithAddition.pt"
+# modelNmae = "models/TopViewMiniscopeBodyBestWithAddition.engine"
 confidenceCoefficient = 0.6
-UnityshmCare = True
+CCare = False
+CType:Literal['unity', 'processing'] = "unity"
+CPort = 2333 # for processing
+ConnectRetryInterval = 2
+BaslerSyncSignalControl = True#true: ExposureActive after connection, false: always ExposureActive
 resolution = [1440,1080]
+FPS = 50#50fps max, grap need ~15ms, others need ~18.5ms in total
+baslerWaitTime = int(2000/FPS) + 1
 recordResult = False
 recordPredictResult = False
 recordMissframe = False
@@ -42,6 +49,7 @@ Task: Literal['detect', 'track'] = 'track'
 frame_rate_divider = 1  # 设置帧率除数
 missed_frame_rate_divider = 10
 frame_count = 0  # 初始化帧计数器
+grabbedFrameCount = 0
 missed_frame_count = 0
 hide = False
 simulate = False
@@ -52,6 +60,9 @@ FontSize = 0.8
 FontThick = 2
 costTime = 0
 useCuda = torch.cuda.is_available()
+device = "cuda:0" if useCuda else "cpu"
+if not useCuda:
+    print("Cuda not available, using cpu")
 performanceAnalysis = False
 task_queue = queue.Queue()
 result_queue = queue.Queue()
@@ -59,11 +70,18 @@ result_queue = queue.Queue()
 os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 if not os.path.exists(videoSaveFolder):
     os.mkdir(videoSaveFolder)
+
+processingcConnectRetryTime = 0
+
+
 # endregion ------------------------------------------------meta Info end-------------------------------------------
 
 # region ------------------------------------------------camera and log Info-------------------------------------------
 # 连接Basler相机列表的第一个相机
 def setBaslerCamera(_camera:pylon.InstantCamera):
+    if _camera is None:
+        return
+    
     _camera.Open()
     _camera.Width.Value = resolution[0]
     _camera.Height.Value = resolution[1]
@@ -72,9 +90,40 @@ def setBaslerCamera(_camera:pylon.InstantCamera):
     _camera.ExposureTime.Value = 10000
     _camera.LineSelector.Value = "Line3"
     _camera.LineMode.SetValue("Output")
-        # Set the source signal to User Output 1
-    _camera.LineSource.Value = "ExposureActive"
-    _camera.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
+    # _camera.LineSource.Value = "UserOutput2"
+    # _camera.UserOutputSelector.Value = "UserOutput2"
+    # _camera.UserOutputValue.Value = True
+    _camera.TriggerSelector.Value = "FrameStart"
+    _camera.TriggerMode.Value = "On"
+    _camera.TriggerSource.Value = "Software"
+    # _camera.RegisterConfiguration(pylon.SoftwareTriggerConfiguration(), pylon.RegistrationMode_ReplaceAll,
+    #                          pylon.Cleanup_Delete)
+    # _camera.StartGrabbing()
+    if not BaslerSyncSignalControl:
+        _camera.LineSource.Value = "ExposureActive"
+        print("basler set to ExposureActive")
+    else:
+        _camera.LineSource.Value = "UserOutput2"
+        _camera.UserOutputSelector.Value = "UserOutput2"
+        _camera.UserOutputValue.Value = True
+    _camera.StartGrabbing(pylon.GrabStrategy_OneByOne)
+
+def BaslerSyncEnable(_enable:bool = True):
+    _enable = (not BaslerSyncSignalControl) | _enable
+    if CameraType == "basler":
+        if grabber is not None:
+            _camera = grabber.baslerCamera
+        else:
+            _camera = camera
+
+        if _enable:
+            _camera.LineSource.Value = "ExposureActive"
+            print("basler set to ExposureActive")
+        else:
+            _camera.LineSource.Value = "UserOutput2"
+            _camera.UserOutputSelector.Value = "UserOutput2"
+            _camera.UserOutputValue.Value = True
+
 
 if multiThread:
     camera = None
@@ -113,36 +162,6 @@ else:
     outRaw = None
 defineCircle = CircleSelect.DefineCircle()
 
-# class YoloMultiThreadPredict(threading.Thread):
-#     def __init__(self, model):
-#         super.__init__()
-#         self.predictFrame = None
-#         self.predictFrameInd = -1
-#         self.predictedFrameInd = -1
-#         self.model:Model = model
-#         self.resultsMaxLen = 10
-#         self.results:deque = deque(maxlen=self.resultsMaxLen)
-#         self.lock = threading.Lock()
-#         self.runing = False
-    
-#     def Predict(self, _ind, _frame):
-#         if _ind != self.predictFrameInd and self.predictFrameInd == self.predictedFrameInd:
-#             with self.lock:
-#                 self.predictFrame = _frame
-#                 self.predictFrameInd = _ind
-    
-#     def GetPredicResult(self, _ind):
-#         if _ind > self.self.predictedFrameInd or _ind <= self.predictedFrameInd - len(self.results):
-#             return None
-#         else:
-#             return self.results[_ind - self.predictedFrameInd - 1]
-        
-#     def run(self):
-#         self.running = True
-
-#         while self.runing:
-#             self.results.append(model.Predict(Predictframe, task= model.Task))
-#             self.predictedFrameInd = self.predictFrameInd
 def YoloMultiThreadPredict():
     while True:
         frame, _ind = task_queue.get()
@@ -157,20 +176,8 @@ class FrameGrabber(threading.Thread):
         if CameraType == "basler":
             try:
                 self.tempCamera = pylon.InstantCamera(pylon.TlFactory.GetInstance().CreateFirstDevice())
-            
                 setBaslerCamera(self.tempCamera)
-            # self.tempCamera.Open()
-            # self.tempCamera.Width.Value = resolution[0]
-            # self.tempCamera.Height.Value = resolution[1]
-  
-            # self.tempCamera.Gain.Value = 7.5
-            # self.tempCamera.ExposureTime.Value = 10000
-            # self.tempCamera.LineSelector.Value = "Line3"
-            # # Set the source signal to User Output 1
-            # self.tempCamera.LineSource.Value = "UserOutput1"
-            # # Select the User Output 1 signal
-            # self.tempCamera.UserOutputSelector.Value = "UserOutput1"
-            # self.tempCamera.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
+
             except Exception as e:
                 print(f"failed to connect to basler camera:{e}")
                 exit()
@@ -203,8 +210,8 @@ class FrameGrabber(threading.Thread):
         self.running = False
         
         # 动态调整参数
-        self.interval = 0.95 * (1.0 / fps)  # 基础间隔缩短5%
-        self.adjustment_factor = 0.2         # 延迟补偿系数
+        self.interval = 1.0 / fps
+        self.adjustment_factor = 0.1         # 延迟补偿系数
         self.last_delay = 0.0
 
     def releaseWriter(self):
@@ -215,32 +222,47 @@ class FrameGrabber(threading.Thread):
             self.camera.release()
 
     def getFrame(self) -> tuple[bool, np.ndarray]:
-        if self.cameraType == "basler":
-            grabResult = self.baslerCamera.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
-            frame = cv2.cvtColor(np.array(grabResult.Array, np.uint8), cv2.COLOR_GRAY2RGB)
-            ret =  grabResult.GrabSucceeded()
-            if not ret:
-                for i in range(3):
-                    print(f"failed to get frame {i+1} times")
-                    grabResult = self.baslerCamera.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
-                    frame = cv2.cvtColor(np.array(grabResult.Array, np.uint8), cv2.COLOR_GRAY2RGB)
-                    ret =  grabResult.GrabSucceeded()
-                    if ret:
-                        break
-                print("lost connection to basler")
-        else:
-            ret, frame = self.camera.read()
-            if not ret:
-                print("no camera connected")
-        return ret, frame
+        try:
+            if self.cameraType == "basler":
+                # _t = time.time()
+                if self.baslerCamera.WaitForFrameTriggerReady(baslerWaitTime, pylon.TimeoutHandling_ThrowException):
+                    self.baslerCamera.ExecuteSoftwareTrigger()
+                    # print("this step?")
+                # grabResult = self.baslerCamera.GrabOne(100, pylon.TimeoutHandling_ThrowException)#
+                grabResult = self.baslerCamera.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
+                # print(f"grab time:{time.time()-_t}")
+                ret =  grabResult is not None
+                # ret =  grabResult.GrabSucceeded()
+                if not ret:
+                    for i in range(3):
+                        print(f"failed to get frame {i+1} times")
+                        grabResult = self.baslerCamera.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
+                        frame = cv2.cvtColor(np.array(grabResult.Array, np.uint8), cv2.COLOR_GRAY2RGB)
+                        ret =  grabResult.GrabSucceeded()
+                        if ret:
+                            break
+                    print("lost connection to basler")
+                frame = cv2.cvtColor(np.array(grabResult.Array, np.uint8), cv2.COLOR_GRAY2RGB)
+            else:
+                ret, frame = self.camera.read()
+                if not ret:
+                    print("no camera connected")
+            return ret, frame
+        except Exception as e:
+            print(e)
+            return False, None
+    
+    def clearPreviewStatus(self):
+        self.exposuredFrames = 0
+        self.frame_buffer.clear()
 
     def run(self):
         self.running = True
-        next_time = time.time()
+        expect_start_time = time.time()
         
         while self.running:
             # 动态调整间隔
-            adjusted_interval = max(0, self.interval - self.last_delay * self.adjustment_factor)
+            adjusted_interval = max(0.0001, self.interval - self.last_delay * self.adjustment_factor)
             
             start_time = time.time()
             ret, frame = self.getFrame()
@@ -267,12 +289,17 @@ class FrameGrabber(threading.Thread):
             
             # 计算延迟补偿
             process_time = time.time() - start_time
-            actual_delay = process_time - adjusted_interval
-            self.last_delay = max(0, actual_delay)
+            # print(f"process time:{process_time}")
+            # actual_delay = process_time - adjusted_interval
+
+
+            # print(f"last_delay:{self.last_delay}")
+            # self.last_delay = max(0, actual_delay)
+            expect_start_time += self.interval
             
             # 控制帧率
-            next_time += adjusted_interval
-            sleep_time = next_time - time.time()
+            sleep_time = expect_start_time - time.time()
+            # print(f"sleep_time:{sleep_time}")
             if sleep_time > 0:
                 time.sleep(sleep_time)
 
@@ -287,7 +314,7 @@ class FrameGrabber(threading.Thread):
         with self.lock:
             if len(self.frame_buffer):
                 # 返回最新帧并保留缓存
-                return True,self.exposuredFrames, self.frame_buffer[-1]
+                return True, self.exposuredFrames, self.frame_buffer[-1]
             return False, -1, None
         
     def returnCameraStatus(self):
@@ -358,14 +385,14 @@ class Model():
         self.model = None
         # self.openVINOModel:CompiledModel = None
 
-        if modelName.endswith(".pt"):
+        if modelName.endswith(".pt") or modelName.endswith(".engine"):
             self.model = YOLO(self.modelName)
             self.modelType = "yolo"
         elif modelName.endswith(".onnx"):
             self.model = YOLO(modelName)
             self.modelType = "onnx"
         else:
-            print("目前仅支持yolo(.pt)模型，onnx模型")
+            print("目前仅支持yolo(.pt, .engine)模型，onnx模型")
             # print("目前仅支持yolo(.pt)模型，openVINO模型")
             exit()
 
@@ -373,9 +400,9 @@ class Model():
         if self.modelType == "yolo":
             tempmodel:YOLO = self.model
             if task == 'detect':
-                results = tempmodel(img, verbose=False, conf = confidenceCoefficient, device = "cuda:0" if useCuda else "cpu")
+                results = tempmodel(img, verbose=False, conf = confidenceCoefficient, device = device, task = "detect")
             elif task == 'track':
-                results = tempmodel.track(img, verbose=False, conf = confidenceCoefficient, device = "cuda:0" if useCuda else "cpu")
+                results = tempmodel.track(img, verbose=False, conf = confidenceCoefficient, device = device)
             for result in results:
                 if len(result.boxes):
                     box = result.boxes[0]
@@ -387,9 +414,9 @@ class Model():
             resizedimg = cv2.resize(img, (640, 480))
             if self.modelType == "onnx":
                 if task == 'detect':
-                    results = self.model(resizedimg, imgsz=(480,640), verbose=False, conf = confidenceCoefficient, device = "cuda:0" if useCuda else "cpu")
+                    results = self.model(resizedimg, imgsz=(480,640), verbose=False, conf = confidenceCoefficient, device = device)
                 elif task == 'track':
-                    results = self.model.track(resizedimg, imgsz=(480,640), verbose=False, conf = confidenceCoefficient, device = "cuda:0" if useCuda else "cpu")
+                    results = self.model.track(resizedimg, imgsz=(480,640), verbose=False, conf = confidenceCoefficient, device = device)
                 for result in results:
                     if len(result.boxes):
                         box = result.boxes[0]
@@ -644,23 +671,104 @@ class GUI:
 
 #endregion
 
+# region ----------------------------------------communicate-----------------------------------
+class ProcessingCommunicate:
+    def __init__(self, port:int, test:bool = False):
+        if port == -1:
+            print("inaviable port!")
+            Quit()
+        self.care = ""
+        self.test = test
+        self.msgId = -1
+        self.port = port
+        self.connected = False
+        self.socketInstance = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.Connect()
+
+    def __del__(self):
+        self.Disconnect()
+        print("socket closed")
+    
+    def Connect(self, slient:bool = False):
+        if self.port != -1:
+            address = ('127.0.0.1', self.port)
+            if self.socketInstance.connect_ex(address) != 0:
+                if not slient:
+                    print("Failed to connect to server")
+            else:
+                self.connected = True
+                self.msgId = 0
+                if CameraType == "basler":
+                    BaslerSyncEnable()
+
+        return True if self.connected else False
+
+    def CheckOnlineClientsCount(self):
+        return 1 if self.connected else 0
+    
+    def Disconnect(self):
+        self.socketInstance.close()
+        self.connected = False
+        BaslerSyncEnable(False)
+
+    def WriteContent(self, msg:str):
+        if self.connected:
+            self.msgId += 1
+            msg = str(self.msgId) + msg if self.test else msg
+            try:
+                if self.socketInstance.sendall(msg.encode()) != None:
+                    print(f"Failed to send message: {msg}")
+            except Exception as e:#ConnectionError
+                self.connected = False
+                self.msgId = -1
+                print(f"error occured in sending message: {msg}, exception: {e}")
+        else:
+            if self.test:
+                print("lost connection to server")
+
+    def InitBuffer(self):
+        return True
+    def UpdateOnlineStatus(self):
+        pass
+    def ShowAllData(self):
+        pass
+    
+#endregion
 def getFrame() -> tuple[bool, np.ndarray, int]:
     if multiThread:
         ret, frameInd, frame = grabber.get_last_frame()
         # grabber.clear_buffer()
         return ret, frame, frameInd
     else:
-        if CameraType == "basler":
-            grabResult = camera.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
-            frame = cv2.cvtColor(np.array(grabResult.Array, np.uint8), cv2.COLOR_GRAY2RGB)
-            ret =  grabResult.GrabSucceeded()
-            if not ret:
-                print("lost connection to basler")
-        else:
-            ret, frame = camera.read()
-            if not ret:
-                print("no camera connected")
-        return ret, frame, frame_count
+        try:
+            if CameraType == "basler":
+                # _t = time.time()
+                if camera.WaitForFrameTriggerReady(baslerWaitTime, pylon.TimeoutHandling_ThrowException):
+                    camera.ExecuteSoftwareTrigger()
+                    # print("this step?")
+                # grabResult = self.baslerCamera.GrabOne(100, pylon.TimeoutHandling_ThrowException)#
+                grabResult = camera.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
+                # print(f"grab time:{time.time()-_t}")
+                ret =  grabResult is not None
+                # ret =  grabResult.GrabSucceeded()
+                if not ret:
+                    for i in range(3):
+                        print(f"failed to get frame {i+1} times")
+                        grabResult = camera.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
+                        frame = cv2.cvtColor(np.array(grabResult.Array, np.uint8), cv2.COLOR_GRAY2RGB)
+                        ret =  grabResult.GrabSucceeded()
+                        if ret:
+                            break
+                    print("lost connection to basler")
+                frame = cv2.cvtColor(np.array(grabResult.Array, np.uint8), cv2.COLOR_GRAY2RGB)
+            else:
+                ret, frame = camera.read()
+                if not ret:
+                    print("no camera connected")
+            return ret, frame
+        except Exception as e:
+            print(e)
+            return False, None
     
 def TrygetFrame(waitTime:float = 0.01) -> tuple[bool, np.ndarray, int]:
     timer:list[float] = [time.time(), -1]
@@ -675,13 +783,13 @@ def TrygetFrame(waitTime:float = 0.01) -> tuple[bool, np.ndarray, int]:
             if time.time() - timer[1] > waitTime:
                 return ret, frame, frameInd
 
+grabber = None
 if multiThread:
-    grabber = FrameGrabber(_cameraType= CameraType)
+    grabber = FrameGrabber(_cameraType= CameraType, fps=FPS)
     grabber.start()
-    if not UnityshmCare:
+    if not CCare:
         grabber.startRecord()
     threading.Thread(target=YoloMultiThreadPredict, daemon=True).start()
-
 
 def Quit():
     if multiThread:
@@ -691,35 +799,27 @@ def Quit():
 fristFrame = None
 selectSceneMask = None
 selectMask = None
+connectSignMask = None
 PreBoolMask = None
-if len(sceneInfo) == 0:
-    ret, fristFrame, frameInd = TrygetFrame(1)
-    if not ret:
-        print("no camera connected")
-        Quit()
-    selectSceneMask = np.zeros_like(fristFrame)
-    selectMask = np.zeros_like(fristFrame)
+ret, fristFrame, _ = TrygetFrame(1)
+if not ret:
+    print("no camera connected")
+    Quit()
+selectSceneMask = np.zeros_like(fristFrame)
+selectMask = np.zeros_like(fristFrame)
 
+if len(sceneInfo) == 0:
     sceneCenter, sceneRadius, sceneAngle = defineCircle.define_circle_by_three_points(fristFrame)
     # sceneAngle -= 90 #defineCircle中以正上方为0
     sceneInfo = [sceneCenter[0], sceneCenter[1], sceneRadius, sceneAngle]
     selectChanged = True
-    selectSceneMask = cv2.circle(selectSceneMask, sceneCenter, sceneRadius, (0, 255, 0), 2)
-    selectSceneMask = CircleSelect.draw_arrow(selectSceneMask, sceneCenter, sceneRadius, sceneAngle, (0, 255, 0), 2)
-
 else:
-    ret, fristFrame, _ = TrygetFrame(1)
-    if not ret:
-        print("no camera connected")
-        Quit()
-    selectSceneMask = np.zeros_like(fristFrame)
-    selectMask = np.zeros_like(fristFrame)
-
     sceneCenter = (int(sceneInfo[0]), int(sceneInfo[1]))
     sceneRadius = int(sceneInfo[2])
     sceneAngle = sceneInfo[3]
-    selectSceneMask = cv2.circle(selectSceneMask, sceneCenter, sceneRadius, (0, 255, 0), 2)
-    selectSceneMask = CircleSelect.draw_arrow(selectSceneMask, sceneCenter, sceneRadius, sceneAngle, (0, 255, 0), 2)
+
+selectSceneMask = cv2.circle(selectSceneMask, sceneCenter, sceneRadius, (0, 255, 0), 2)
+selectSceneMask = CircleSelect.draw_arrow(selectSceneMask, sceneCenter, sceneRadius, sceneAngle, (0, 255, 0), 2)
 drawSelectArea(selectMask, selectAreas)
 PreBoolMask = ~(selectMask.any(axis=-1))
 selectMask[PreBoolMask] = selectSceneMask[PreBoolMask]
@@ -755,8 +855,11 @@ cv2.setMouseCallback("frame", simulateMousePosUpdate)
 
 ProcessStartTime = time.time()
 
-UnityShm = IPCTest.SharedMemoryObj('UnityShareMemoryTest', "server", "UnityProject" if UnityshmCare else "", 32+5*16*1024)#~80KB
-if not UnityShm.InitBuffer():
+if CType == "unity":
+    CInstance = IPCTest.SharedMemoryObj('UnityShareMemoryTest', "server", "UnityProject" if CCare else "", 32+5*16*1024)#~80KB
+else:
+    CInstance = ProcessingCommunicate(CPort)
+if not CInstance.InitBuffer():
     Quit()
 
 if performanceAnalysis:
@@ -770,6 +873,7 @@ hideAltTime = -1
 while CameraType != "basler" or (multiThread or camera.IsGrabbing()):
     ret, frame, frameInd = getFrame()
     if not ret:
+        print("frame stream stoped")
         break
     rectedFrame = frame * availableMask
 
@@ -792,17 +896,17 @@ while CameraType != "basler" or (multiThread or camera.IsGrabbing()):
 
     receiveUnityTimeSuccess = -1
     lastReceiveUnityTime = -1
-    onlineNumber = UnityShm.CheckOnlineClientsCount()
-    if UnityShm.care != "" :
+    onlineNumber = CInstance.CheckOnlineClientsCount()
+    if CInstance.care != "" and CType == "unity":
         if onlineNumber > 0:
-            if UnityShm.careindex == -1:
-                UnityShm.CheckApplies()
+            if CInstance.careindex == -1:
+                CInstance.CheckApplies()
             else:
                 if onlineNumber > 0 and not sync:
                     syncTryTimes = 0
                     syncTryTimesMax = 100
                     while(syncTryTimes < syncTryTimesMax):
-                        timeMsg = UnityShm.ReadToStr(UnityShm.careindex)
+                        timeMsg = CInstance.ReadToStr(CInstance.careindex)
                         timeMsg.reverse()
                         for msg in timeMsg:
                             if msg.startswith("time:"):
@@ -822,18 +926,20 @@ while CameraType != "basler" or (multiThread or camera.IsGrabbing()):
                                             unityFixedUscaledTimeOffset = time.process_time() - createdTime - temptime
                                             lastReceiveUnityTime = temptime
                                             for i in range(10):
-                                                UnityShm.WriteContent("scene:" + f"{sceneCenter[0]};{sceneCenter[1]};{sceneRadius:.2f};{sceneAngle:.2f};{len(selectAreas)}")
+                                                CInstance.WriteContent("scene:" + f"{sceneCenter[0]};{sceneCenter[1]};{sceneRadius:.2f};{sceneAngle:.2f};{len(selectAreas)}")
                                                 time.sleep(0.01)
                                             sync = True
                                             syncInd = 0
-                                            UnityShm.WriteClear()
+                                            CInstance.WriteClear()
                                             for i in range(5):
                                                 for selectedAreaSync in selectAreas:
-                                                    UnityShm.WriteContent("select:" + ";".join(map(str, selectedAreaSync)))
+                                                    CInstance.WriteContent("select:" + ";".join(map(str, selectedAreaSync)))
                                                     time.sleep(0.01)
 
                                             print("sync succeed")
                                             syncTryTimes = syncTryTimesMax
+                                            BaslerSyncEnable()
+
                                             if multiThread:
                                                 grabber.startRecord()
                                             else:
@@ -854,7 +960,7 @@ while CameraType != "basler" or (multiThread or camera.IsGrabbing()):
                                         receiveUnityTimeSuccess = -1
                                         lastReceiveUnityTime = -1
                                         syncInd = -1
-                        UnityShm.WriteContent(f"time:{time.process_time() - createdTime}")
+                        CInstance.WriteContent(f"time:{time.process_time() - createdTime}")
                         syncTryTimes += 1
                         time.sleep(0.01)
                     # UnityShm.ReadToStr(1)
@@ -865,6 +971,8 @@ while CameraType != "basler" or (multiThread or camera.IsGrabbing()):
         elif onlineNumber == 0:
             if sync:
                 print("0 online member")
+                BaslerSyncEnable(False)
+
             receiveUnityTimeSuccess = -1
             unityFixedUscaledTimeOffset = 0
             sync = False
@@ -874,13 +982,19 @@ while CameraType != "basler" or (multiThread or camera.IsGrabbing()):
                 VideoClear()
 
         else:#sync = true
-            readMsg = UnityShm.ReadToStr(1)
+            readMsg = CInstance.ReadToStr(1)
+    elif CType == "processing":
+        if onlineNumber <= 0 and processingcConnectRetryTime - time.time() >= ConnectRetryInterval:
+            if CInstance.Connect(slient = True):
+                print("connected")
+            else:
+                processingcConnectRetryTime = time.time()
 
-    UnityShmPrepared:bool = (UnityShm.care != "" and sync) or UnityShm.care == ""
+    CommunicatePrepared:bool = (CInstance.care != "" and sync) or CInstance.care == ""
 
     # if UnityShmPrepared:
     resultInd = -1
-    if UnityShmPrepared:
+    if CommunicatePrepared:
         if multiThread:
             if task_queue.empty() and (lastframeInd < 0 or lastframeInd != frameInd):
                 task_queue.put((Predictframe, frameInd))
@@ -923,7 +1037,7 @@ while CameraType != "basler" or (multiThread or camera.IsGrabbing()):
     # index = index +1
         realMouseCenter = [-1, -1]
         missed_frame_count += 1
-        if recordMissframe and UnityShmPrepared and missed_frame_count % missed_frame_rate_divider == 0:
+        if recordMissframe and CommunicatePrepared and missed_frame_count % missed_frame_rate_divider == 0:
             cv2.imwrite(missedFrameSaveFolder + timestr + f"frame{frame_count}.jpg", frame)
 
         if not hide:
@@ -942,7 +1056,7 @@ while CameraType != "basler" or (multiThread or camera.IsGrabbing()):
             temp.append(int((time.time() - ProcessStartTime) * 100))
             temp.append(resultInd)
             simulateMousePos[2] = syncInd if syncInd >= 0 else -1
-            UnityShm.WriteContent("pos:" + ";".join([str(i) for i in temp]))
+            CInstance.WriteContent("pos:" + ";".join([str(i) for i in temp]))
             # print(f"pos:{realMouseCenter}")
 
     # break
@@ -951,7 +1065,7 @@ while CameraType != "basler" or (multiThread or camera.IsGrabbing()):
         simulateMousePos[3] = int((time.time() - ProcessStartTime) * 100)
         simulateMousePos[4] = frameInd
         # print(simulateMousePos)
-        UnityShm.WriteContent("pos:" + ";".join([str(i) for i in simulateMousePos]))
+        CInstance.WriteContent("pos:" + ";".join([str(i) for i in simulateMousePos]))
 
 
     if (frame_count + 1) % 60 == 0:
@@ -960,7 +1074,7 @@ while CameraType != "basler" or (multiThread or camera.IsGrabbing()):
         startTime = time.time()
         if costTime > 0:
             fps = 60/costTime
-            UnityShm.UpdateOnlineStatus()#作为server不需要检查返回值
+            CInstance.UpdateOnlineStatus()#作为server不需要检查返回值
 
     _time = time.time()
     if not hide:
@@ -975,8 +1089,8 @@ while CameraType != "basler" or (multiThread or camera.IsGrabbing()):
                 if hide:
                     cv2.destroyWindow("frame")
         elif keyboard.is_pressed("shift+v"):
-            if UnityShmPrepared:
-                UnityShm.ShowAllData()
+            if CommunicatePrepared:
+                CInstance.ShowAllData()
                 while keyboard.is_pressed("shift+v"):
                     continue
         elif keyboard.is_pressed("shift+s"):
@@ -995,15 +1109,15 @@ while CameraType != "basler" or (multiThread or camera.IsGrabbing()):
             deleted = oselect_set - select_set
             if len(added) != 0 or len(deleted) != 0:
                 selectChanged = True
-            if UnityShmPrepared:
+            if CommunicatePrepared:
                 for item in added:
-                    UnityShm.WriteContent("select:" + ";".join(map(str, item)))
+                    CInstance.WriteContent("select:" + ";".join(map(str, item)))
 
                 # 处理被删除的内容
                 for item in deleted:
                     item_list = list(item)
                     item_list[0] = (item_list[0] + 1) * -1
-                    UnityShm.WriteContent("select:" + ";".join(map(str, item_list)))
+                    CInstance.WriteContent("select:" + ";".join(map(str, item_list)))
 
         elif keyboard.is_pressed("shift+space"):
             cv2.waitKey()
@@ -1017,7 +1131,7 @@ while CameraType != "basler" or (multiThread or camera.IsGrabbing()):
             if _time > hideAltTime:
                 hide = not hide
                 hideAltTime = _time + hideAltInterval
-        if (frame_count + 1) % 30 == 0:
+        if (frame_count + 1) % 60 == 0:
             print(f"fps: {fps:.2f}")
 
     if keyboard.is_pressed("shift+esc"):
@@ -1056,4 +1170,4 @@ if recordResult and outRaw != None:
         outRaw.release()
     print("video stream released")
 cv2.destroyAllWindows()
-del UnityShm
+del CInstance
