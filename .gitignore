@@ -20,3 +20,5 @@ LogEventLogs/lyf_01.evt
 *.cache
 /打印图
 /tempOutput
+/logevent_Release
+/Logs

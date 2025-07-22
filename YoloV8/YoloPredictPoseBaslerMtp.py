@@ -420,24 +420,27 @@ def PointOffset(point, offset:int):
     return (point[0] + offset, point[1] - offset)
 
 def drawSelectArea(frame, selectAreas:list[list[int]], color = None):
-    global markCountPerType
-    fontSize = 1.5
-    fontThick = 2
-    
-    for selectPlace in selectAreas:
-        mark = selectPlace[0] // markCountPerType
-        if color == None:
-            drawcolor = (255, 0, 0) if mark == 0 else (0, 0, 255)
-        else:
-            drawcolor = color
+    try:
+        global markCountPerType
+        fontSize = 1.5
+        fontThick = 2
+        
+        for selectPlace in selectAreas:
+            mark = selectPlace[0] // markCountPerType
+            if color == None:
+                drawcolor = (255, 0, 0) if mark == 0 else (0, 0, 255)
+            else:
+                drawcolor = color
 
-        if selectPlace[1] == 0:
-            frame = cv2.circle(frame, (selectPlace[2], selectPlace[3]), selectPlace[4], drawcolor, 2)
-            frame = cv2.putText(frame, str(selectPlace[0] % markCountPerType), PointOffset((selectPlace[2], selectPlace[3]), -10), cv2.FONT_HERSHEY_SIMPLEX, fontSize, drawcolor, fontThick)
+            if selectPlace[1] == 0:
+                frame = cv2.circle(frame, (selectPlace[2], selectPlace[3]), selectPlace[4], drawcolor, 2)
+                frame = cv2.putText(frame, str(selectPlace[0] % markCountPerType), PointOffset((selectPlace[2], selectPlace[3]), -10), cv2.FONT_HERSHEY_SIMPLEX, fontSize, drawcolor, fontThick)
 
-        elif selectPlace[1] == 1:
-            frame = cv2.rectangle(frame, (selectPlace[2], selectPlace[3]), (selectPlace[4], selectPlace[5]), drawcolor, 2)
-            frame = cv2.putText(frame, str(selectPlace[0] % markCountPerType), PointOffset(((selectPlace[2] + selectPlace[4]) // 2, (selectPlace[3] + selectPlace[5]) // 2), -10), cv2.FONT_HERSHEY_SIMPLEX, fontSize, drawcolor, fontThick)
+            elif selectPlace[1] == 1:
+                frame = cv2.rectangle(frame, (selectPlace[2], selectPlace[3]), (selectPlace[4], selectPlace[5]), drawcolor, 2)
+                frame = cv2.putText(frame, str(selectPlace[0] % markCountPerType), PointOffset(((selectPlace[2] + selectPlace[4]) // 2, (selectPlace[3] + selectPlace[5]) // 2), -10), cv2.FONT_HERSHEY_SIMPLEX, fontSize, drawcolor, fontThick)
+    except Exception as e:
+        print(f"drawSelectArea error: {e}")
 
 # endregion ----------------------------------------scene and selectAreas info-----------------------------------
 

@@ -69,3 +69,11 @@ def ParseEvent(event_fn, st_events_bits=None):
         st_events[event_field] = extract_event(st_event_data, st_events_bits[event_field])
     return st_events
     
+if __name__ == '__main__':
+    import os
+    event_fn = r'C:\Users\KEHAIXING\Downloads\lyf_01.evt'
+    if os.path.exists(event_fn):
+        evt = ParseEvent(event_fn)
+        for key in evt:
+            print(key, len(evt[key]['Time_S']))
+        print(evt)

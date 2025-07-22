@@ -195,6 +195,8 @@ class DefineCircle(object):
                 cv2.circle(img, center, 2, (0,0,255), -1)
                 if data['preview_circle']:
                     cv2.circle(img, data['preview_circle'][0], data['preview_circle'][1], (0,255,0), 2)
+                    cv2.putText(img, str(data['preview_circle'][1]), data['preview_circle'][0], cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 1)
+
             if len(data['points']) >= 2:
                 center = data['points'][0]
                 radius = int(np.linalg.norm(np.array(center) - np.array(data['points'][1])))

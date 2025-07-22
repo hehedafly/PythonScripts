@@ -303,6 +303,8 @@ class SharedMemoryObj:
         
         if self.CheckOnlineClientsCount() == 0:
             return []
+        if readId < 0 or readId > self.maxClientNum:
+            return []
         
         # for i in range(self.CheckOnlineClients()):
         #     tempId = i

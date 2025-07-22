@@ -9,6 +9,7 @@ import queue
 # Third-party imports
 import torch
 import cv2
+import argparse
 import keyboard
 import numpy as np
 from typing import Literal
@@ -23,20 +24,36 @@ from CircleSelect import CircleSelect
 from MessageBox import PyWinMessageBox
 
 from pyinstrument import Profiler
+
+# region ------------------------------------------------argparse-------------------------------------------
+parser = argparse.ArgumentParser()
+parser.add_argument('-u', '--useargs', action="store_true", help='按argparse参数运行')
+parser.add_argument('-l', '--load', action="store_true", help='加载sceneInfo')
+parser.add_argument('-c', '--camera', type=str, default='basler', help='图像来源basler, common, video')
+parser.add_argument('--ccare', action="store_true", help='与其他程序通讯')
+parser.add_argument('-t', '--type', type=str, default='unity', help='通讯对象, unity或processing')
+parser.add_argument('-s', '--disablebaslersyncsignal', action="store_true", help='true: always ExposureActive, false: ExposureActive after connection')
+parser.add_argument('-f', '--fps', type=int, default=50, help='')
+args = parser.parse_args()
+useargs = args.useargs
+#endregion ------------------------------------------------argparse end------------------------------
+
 # region ------------------------------------------------meta Info-------------------------------------------
 CameraTypes = ["basler", "common", "video"]
-CameraType = "video"
+CameraType = "video"                                             if not useargs else args.camera
 videoPath = "01_17_1842outputraw.mp4"
 modelNmae = "models/TopViewMiniscopeBodyBestWithAddition.pt"
 # modelNmae = "models/TopViewMiniscopeBodyBestWithAddition.engine"
 confidenceCoefficient = 0.6
-CCare = False
-CType:Literal['unity', 'processing'] = "unity"
+CCare = True                                                    if not useargs else args.ccare
+CType:Literal['unity', 'processing'] = "unity"                   if not useargs else args.type
 CPort = 2333 # for processing
 ConnectRetryInterval = 2
-BaslerSyncSignalControl = True#true: ExposureActive after connection, false: always ExposureActive
+BaslerSyncSignalControl = True                                   if not useargs else not args.disablebaslersyncsignal
+#true: ExposureActive after connection, false: always ExposureActive
 resolution = [1440,1080]
-FPS = 50#50fps max, grap need ~15ms, others need ~18.5ms in total
+FPS = 50                                                         if not useargs else args.fps
+#50fps max, grap need ~15ms, others need ~18.5ms in total
 baslerWaitTime = int(2000/FPS) + 1
 recordResult = False
 recordPredictResult = False
@@ -53,7 +70,7 @@ grabbedFrameCount = 0
 missed_frame_count = 0
 hide = False
 simulate = False
-selectAreas:list[list[int]] = []
+selectAreas:list[list[int]] = []#[mark, type(0:circle, 1:rect), centerx(fpx), centery(fpy), radius(spx), angle(spy)]
 simulateMousePos = [-1, -1, -1, -1, -1]
 selectChanged = False
 FontSize = 0.8
@@ -66,6 +83,7 @@ if not useCuda:
 performanceAnalysis = False
 task_queue = queue.Queue()
 result_queue = queue.Queue()
+message_receive_queue = queue.Queue()
 
 os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 if not os.path.exists(videoSaveFolder):
@@ -168,6 +186,12 @@ def YoloMultiThreadPredict():
         result = model.Predict(frame, task=Task)
         result_queue.put((result, _ind))
 
+def CareMessageReceive():
+    event = threading.Event()
+    while True:
+        event.wait(0.02)
+        for msg in CInstance.ReadToStr(CInstance.careindex):
+            message_receive_queue.put(msg)
 
 class FrameGrabber(threading.Thread):
     def __init__(self, _cameraType, fps=50):
@@ -214,7 +238,7 @@ class FrameGrabber(threading.Thread):
         self.adjustment_factor = 0.1         # 延迟补偿系数
         self.last_delay = 0.0
 
-    def releaseWriter(self):
+    def releaseCamera(self):
         if self.baslerCamera is not None:
             self.baslerCamera.StopGrabbing()
             self.baslerCamera.Close()
@@ -288,13 +312,7 @@ class FrameGrabber(threading.Thread):
             self.frame_buffer.append(frame)
             
             # 计算延迟补偿
-            process_time = time.time() - start_time
-            # print(f"process time:{process_time}")
-            # actual_delay = process_time - adjusted_interval
-
-
-            # print(f"last_delay:{self.last_delay}")
-            # self.last_delay = max(0, actual_delay)
+            # process_time = time.time() - start_time
             expect_start_time += self.interval
             
             # 控制帧率
@@ -303,7 +321,7 @@ class FrameGrabber(threading.Thread):
             if sleep_time > 0:
                 time.sleep(sleep_time)
 
-        self.releaseWriter()
+        self.releaseCamera()
         if self.writer != None:
             self.writer.release()
 
@@ -313,7 +331,7 @@ class FrameGrabber(threading.Thread):
     def get_last_frame(self) -> tuple[bool, int, np.ndarray]:
         with self.lock:
             if len(self.frame_buffer):
-                # 返回最新帧并保留缓存
+                # 返回最新帧
                 return True, self.exposuredFrames, self.frame_buffer[-1]
             return False, -1, None
         
@@ -447,17 +465,16 @@ f_selectionSaveTxt = open(selectionSaveTxtName, 'r+' if os.path.exists(selection
 content = f_selectionSaveTxt.readlines()
 sceneContent = [s for s in content if s.startswith("scene:")]
 areaContent = [s for s in content if s.startswith("selectAreas:")]
-if len(sceneContent) and PyWinMessageBox.YesOrNo("load Previous SceneInfo?", "save & load") == 'YES':
+if len(sceneContent) and (args.load or PyWinMessageBox.YesOrNo("load Previous SceneInfo?", "save & load") == 'YES'):
     for line in sceneContent:
         line = line.replace("\n", "")
         sceneInfo = [float(i) for i in (line.split(':')[1]).split(';')]
         print("scene info loaded: " + line)
-if len(areaContent) and PyWinMessageBox.YesOrNo("load Previous select areas?", "save & load") == 'YES':
+if len(areaContent) and (args.load or PyWinMessageBox.YesOrNo("load Previous select areas?", "save & load") == 'YES'):
     for line in areaContent:
         line = line.replace("\n", "")
         selectAreas.append([int(i) for i in (line.split(':')[1]).split(';')])
         print("selectAreas info loaded: " + line)
-
 
 realMouseCenter = [-1, -1]
 def ProcessMouseNearRegion(pos, _frame):
@@ -484,14 +501,16 @@ def drawSelectArea(frame, selectAreas:list[list[int]], color = None):
         else:
             drawcolor = color
 
-        if selectPlace[1] == 0:
-            frame = cv2.circle(frame, (selectPlace[2], selectPlace[3]), selectPlace[4], drawcolor, 2)
-            frame = cv2.putText(frame, str(selectPlace[0] % markCountPerType), PointOffset((selectPlace[2], selectPlace[3]), -10), cv2.FONT_HERSHEY_SIMPLEX, fontSize, drawcolor, fontThick)
+        try:
+            if selectPlace[1] == 0:
+                frame = cv2.circle(frame, (selectPlace[2], selectPlace[3]), selectPlace[4], drawcolor, 2)
+                frame = cv2.putText(frame, str(selectPlace[0] % markCountPerType), PointOffset((selectPlace[2], selectPlace[3]), -10), cv2.FONT_HERSHEY_SIMPLEX, fontSize, drawcolor, fontThick)
 
-        elif selectPlace[1] == 1:
-            frame = cv2.rectangle(frame, (selectPlace[2], selectPlace[3]), (selectPlace[4], selectPlace[5]), drawcolor, 2)
-            frame = cv2.putText(frame, str(selectPlace[0] % markCountPerType), PointOffset(((selectPlace[2] + selectPlace[4]) // 2, (selectPlace[3] + selectPlace[5]) // 2), -10), cv2.FONT_HERSHEY_SIMPLEX, fontSize, drawcolor, fontThick)
-
+            elif selectPlace[1] == 1:
+                frame = cv2.rectangle(frame, (selectPlace[2], selectPlace[3]), (selectPlace[4], selectPlace[5]), drawcolor, 2)
+                frame = cv2.putText(frame, str(selectPlace[0] % markCountPerType), PointOffset(((selectPlace[2] + selectPlace[4]) // 2, (selectPlace[3] + selectPlace[5]) // 2), -10), cv2.FONT_HERSHEY_SIMPLEX, fontSize, drawcolor, fontThick)
+        except:
+            pass
 # endregion ----------------------------------------scene and selectAreas info-----------------------------------
 
 #region Matplotlib
@@ -528,8 +547,12 @@ class GUI:
         sceneCenter = (int(sceneInfo[0]), int(sceneInfo[1]))
         sceneRadius = int(sceneInfo[2])
         sceneAngle = sceneInfo[3]
-        self.frame = cv2.circle(self.frame, sceneCenter, sceneRadius, (0, 255, 0), 2)
-        self.frame = CircleSelect.draw_arrow(self.frame, sceneCenter, sceneRadius, sceneAngle, (0, 255, 0), 2)
+        sceneType = "rect" if len(sceneInfo) == 5 and sceneInfo[4] == 1 else "circle"
+        if sceneType == "circle":
+            self.frame = cv2.circle(self.frame, sceneCenter, sceneRadius, (0, 255, 0), 2)
+            self.frame = CircleSelect.draw_arrow(self.frame, sceneCenter, sceneRadius, sceneAngle, (0, 255, 0), 2)
+        elif sceneType == "rect":
+            self.frame = cv2.rectangle(self.frame, (sceneCenter[0], sceneCenter[1]), (sceneRadius, sceneAngle), (0, 255, 0), 2)
         
         drawSelectArea(self.frame, self.selectList)
 
@@ -593,6 +616,7 @@ class GUI:
             if clearAll:
                 self.selectList.clear()
             else:
+                print("deleted: [" + ",".join([str(s) for s in self.selectList[-1]]) + "]")
                 self.selectList = self.selectList[:-1]
             plt.close(self.fig)
             self.Init(self.oframe)
@@ -601,7 +625,6 @@ class GUI:
         if len(self.selectList):
             last:list[int] = self.selectList[-1]
             if last[1] != 0:
-
                 return
 
             mark = last[0]
@@ -647,7 +670,8 @@ class GUI:
                 _center, radius, inner = defineCircle.define_circle_by_center_and_point(frame)
                 if(_center != None):
                     selectPlace[2:6] = [_center[0], _center[1], radius, 1 if inner else 0]
-                
+                else:
+                    return
             elif selectType == 1:#rect
                 selectPlace[0] = len(self.type0List) if ButtonLabel == 0 else markCountPerType + len(self.type1List)
                 selectPlace[1] = 1
@@ -809,17 +833,33 @@ selectSceneMask = np.zeros_like(fristFrame)
 selectMask = np.zeros_like(fristFrame)
 
 if len(sceneInfo) == 0:
-    sceneCenter, sceneRadius, sceneAngle = defineCircle.define_circle_by_three_points(fristFrame)
-    # sceneAngle -= 90 #defineCircle中以正上方为0
-    sceneInfo = [sceneCenter[0], sceneCenter[1], sceneRadius, sceneAngle]
+    sceneInfo = [None]
+    while(sceneInfo[0] is None):
+        sceneCenter, sceneRadius, sceneAngle = defineCircle.define_circle_by_three_points(fristFrame)
+        # sceneAngle -= 90 #defineCircle中以正上方为0
+        if sceneCenter is None:
+            if PyWinMessageBox.YesOrNo("Use Rectange instead?", "scene info define") == 'YES':
+                gROI = cv2.selectROI("scene frame", fristFrame, False)
+                sceneInfo = [gROI[0], gROI[1], gROI[0] + gROI[2], gROI[1] + gROI[3], 1]
+                print("created: [" + ",".join([str(s) for s in sceneInfo]) + "]")
+                cv2.destroyWindow("scene frame")
+                break
+            continue
+        sceneInfo = [sceneCenter[0], sceneCenter[1], sceneRadius, sceneAngle, 0]
+        print("created: [" + ",".join([str(s) for s in sceneInfo]) + "]")
+
     selectChanged = True
 else:
     sceneCenter = (int(sceneInfo[0]), int(sceneInfo[1]))
     sceneRadius = int(sceneInfo[2])
     sceneAngle = sceneInfo[3]
 
-selectSceneMask = cv2.circle(selectSceneMask, sceneCenter, sceneRadius, (0, 255, 0), 2)
-selectSceneMask = CircleSelect.draw_arrow(selectSceneMask, sceneCenter, sceneRadius, sceneAngle, (0, 255, 0), 2)
+sceneType = "rect" if len(sceneInfo) == 5 and sceneInfo[4] == 1 else "circle"
+if sceneType == "circle":
+    selectSceneMask = cv2.circle(selectSceneMask, sceneCenter, sceneRadius, (0, 255, 0), 2)
+    selectSceneMask = CircleSelect.draw_arrow(selectSceneMask, sceneCenter, sceneRadius, sceneAngle, (0, 255, 0), 2)
+elif sceneType == "rect":
+    selectSceneMask = cv2.rectangle(selectSceneMask, (sceneInfo[0], sceneInfo[1]), (sceneInfo[2], sceneInfo[3]), (0, 255, 0), 2)
 drawSelectArea(selectMask, selectAreas)
 PreBoolMask = ~(selectMask.any(axis=-1))
 selectMask[PreBoolMask] = selectSceneMask[PreBoolMask]
@@ -862,6 +902,8 @@ else:
 if not CInstance.InitBuffer():
     Quit()
 
+threading.Thread(target=CareMessageReceive, daemon = True).start()
+
 if performanceAnalysis:
     profiler = Profiler()
     profiler.start()
@@ -869,6 +911,7 @@ if performanceAnalysis:
 fps:float = 0
 hideAltInterval = 1
 hideAltTime = -1
+quitAfterClientsOffline = False
 
 while CameraType != "basler" or (multiThread or camera.IsGrabbing()):
     ret, frame, frameInd = getFrame()
@@ -899,6 +942,13 @@ while CameraType != "basler" or (multiThread or camera.IsGrabbing()):
     onlineNumber = CInstance.CheckOnlineClientsCount()
     if CInstance.care != "" and CType == "unity":
         if onlineNumber > 0:
+            while not message_receive_queue.empty():
+                message:str = message_receive_queue.get_nowait()
+                print(f"from unity: {message}")
+                if message.startswith("cmd:"):
+                    if message[4:] == "quit":
+                        print("quit command received")
+                        quitAfterClientsOffline = True
             if CInstance.careindex == -1:
                 CInstance.CheckApplies()
             else:
@@ -981,8 +1031,11 @@ while CameraType != "basler" or (multiThread or camera.IsGrabbing()):
             elif not multiThread:
                 VideoClear()
 
+            if quitAfterClientsOffline:
+                Quit()
+
         else:#sync = true
-            readMsg = CInstance.ReadToStr(1)
+            readMsg = CInstance.ReadToStr(CInstance.careindex)
     elif CType == "processing":
         if onlineNumber <= 0 and processingcConnectRetryTime - time.time() >= ConnectRetryInterval:
             if CInstance.Connect(slient = True):
@@ -1025,7 +1078,6 @@ while CameraType != "basler" or (multiThread or camera.IsGrabbing()):
         
         if recordPredictResult:
             WriteFrame(rectedFrame, False)
-            # out.write(rectedFrame)
             outWritten = True
 
         if not hide:
